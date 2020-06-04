@@ -4,16 +4,63 @@ import os
 import scipy.sparse as sp
 import torch
 from scipy.sparse import linalg
+from Utils import graphTools
+from Utils import dataTools
 
+import ipdb
 
-class DataLoader(object):
+class DataLoaderMetr(object):
     def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
         """
         :param xs:
         :param ys:
         :param batch_size:
-        :param pad_with_last_sample: pad with the last sample to make number of samples divisible to batch_size.
+        :param pad_with_last_sample: pad with the last sample 
+         to make number of samples divisible to batch_size.
         """
+        self.batch_size = batch_size
+        self.current_ind = 0
+        if pad_with_last_sample:
+            num_padding = (batch_size - (len(xs) % batch_size)) % batch_size
+            x_padding = np.repeat(xs[-1:], num_padding, axis=0)
+            y_padding = np.repeat(ys[-1:], num_padding, axis=0)
+            xs = np.concatenate([xs, x_padding], axis=0)
+            ys = np.concatenate([ys, y_padding], axis=0)
+        self.size = len(xs)
+        self.num_batch = int(self.size // self.batch_size)
+        self.xs = xs
+        self.ys = ys
+
+    def shuffle(self):
+        permutation = np.random.permutation(self.size)
+        xs, ys = self.xs[permutation], self.ys[permutation]
+        self.xs = xs
+        self.ys = ys
+
+    def get_iterator(self):
+        self.current_ind = 0
+
+        def _wrapper():
+            while self.current_ind < self.num_batch:
+                start_ind = self.batch_size * self.current_ind
+                end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
+                x_i = self.xs[start_ind: end_ind, ...]
+                y_i = self.ys[start_ind: end_ind, ...]
+                yield (x_i, y_i)
+                self.current_ind += 1
+
+        return _wrapper()
+
+class DataLoaderSyn(object):
+    def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
+        """
+        :param xs:
+        :param ys:
+        :param batch_size:
+        :param pad_with_last_sample: pad with the last sample 
+         to make number of samples divisible to batch_size.
+        """
+        # TODO: 4 values
         self.batch_size = batch_size
         self.current_ind = 0
         if pad_with_last_sample:
@@ -141,7 +188,7 @@ def load_adj(pkl_filename, adjtype):
     return sensor_ids, sensor_id_to_ind, adj
 
 
-def load_dataset(dataset_dir, batch_size, valid_batch_size= None, test_batch_size=None):
+def load_dataset_metr(dataset_dir, batch_size, valid_batch_size= None, test_batch_size=None):
     data = {}
     for category in ['train', 'val', 'test']:
         cat_data = np.load(os.path.join(dataset_dir, category + '.npz'))
@@ -151,11 +198,62 @@ def load_dataset(dataset_dir, batch_size, valid_batch_size= None, test_batch_siz
     # Data format
     for category in ['train', 'val', 'test']:
         data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
-    data['train_loader'] = DataLoader(data['x_train'], data['y_train'], batch_size)
-    data['val_loader'] = DataLoader(data['x_val'], data['y_val'], valid_batch_size)
-    data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size)
+    # x/y_train/val/test: (N, 12, 207, 2)
+    data['train_loader'] = DataLoaderMetr(data['x_train'], data['y_train'], batch_size)
+    data['val_loader'] = DataLoaderMetr(data['x_val'], data['y_val'], valid_batch_size)
+    data['test_loader'] = DataLoaderMetr(data['x_test'], data['y_test'], test_batch_size)
     data['scaler'] = scaler
     return data
+
+def load_dataset_syn(device, batch_size, valid_batch_size= None, test_batch_size=None
+                    same_G=True):
+    # graph config
+    nNodes = 80 #200 # Number of nodes (fMRI regions)
+    graphType = 'SBM' # Type of graph
+    graphOptions = {}
+    graphOptions['nCommunities'] = 5 #64 # Number of communities (EEG node number)
+    graphOptions['probIntra'] = 0.8 # Intracommunity probability
+    graphOptions['probInter'] = 0.2 # Intercommunity probability
+    # sample config
+    nTrain = 40 # Number of training samples
+    nValid = int(0.25 * nTrain) # Number of validation samples
+    nTest = int(0.05 * nTrain) # Number of testing samples
+    num_timestep = 1000
+    F_t = 5
+    K = F_t * 3 # K-step prediction. need K%F_t==0 for a cleaner fMRI cut
+    # noise parameters
+    sigmaSpatial = 0.1
+    sigmaTemporal = 0.1
+    rhoSpatial = 0
+    rhoTemporal = 0
+
+    if same_G:
+        # data generation
+        G = graphTools.Graph(graphType, nNodes, graphOptions)
+        G.computeGFT() # Compute the eigendecomposition of the stored GSO
+        a = np.arange(G.N)
+        data = dataTools.MultiModalityPrediction(G, K, nTrain, nValid, nTest, num_timestep, 
+                                                F_t=F_t, pooltype='avg', #'avg', 'selectOne', 'weighted'
+                                                sigmaSpatial=sigmaSpatial, sigmaTemporal=sigmaTemporal,
+                                                rhoSpatial=rhoSpatial, rhoTemporal=rhoTemporal)
+        data.astype(torch.float64)
+        data.to(device)
+        ipdb.set_trace()
+        data = {}
+        for category in ['train', 'val', 'test']:
+            data['x_' + category] = data.getSamples(category)[0]
+            data['y_' + category] = data.getSamples(category)[1]
+            data['x1_' + category] = data.getSamples(category)[2]
+            data['y1_' + category] = data.getSamples(category)[3]
+        scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), std=data['x_train'][..., 0].std())
+        # Data format
+        for category in ['train', 'val', 'test']:
+            data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
+        data['train_loader'] = DataLoaderSyn(data['x_train'], data['y_train'], batch_size)
+        data['val_loader'] = DataLoaderSyn(data['x_val'], data['y_val'], valid_batch_size)
+        data['test_loader'] = DataLoaderSyn(data['x_test'], data['y_test'], test_batch_size)
+        data['scaler'] = scaler
+        return data
 
 def masked_mse(preds, labels, null_val=np.nan):
     if np.isnan(null_val):
@@ -207,5 +305,3 @@ def metric(pred, real):
     mape = masked_mape(pred,real,0.0).item()
     rmse = masked_rmse(pred,real,0.0).item()
     return mae,mape,rmse
-
-

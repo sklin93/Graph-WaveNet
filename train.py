@@ -16,10 +16,10 @@ parser.add_argument('--gcn_bool',action='store_true',help='whether to add graph 
 parser.add_argument('--aptonly',action='store_true',help='whether only adaptive adj')
 parser.add_argument('--addaptadj',action='store_true',help='whether add adaptive adj')
 parser.add_argument('--randomadj',action='store_true',help='whether random initialize adaptive adj')
-parser.add_argument('--seq_length',type=int,default=12,help='')
+parser.add_argument('--seq_length',type=int,default=15,help='')
 parser.add_argument('--nhid',type=int,default=32,help='')
 parser.add_argument('--in_dim',type=int,default=2,help='inputs dimension')
-parser.add_argument('--num_nodes',type=int,default=207,help='number of nodes')
+parser.add_argument('--num_nodes',type=int,default=80,help='number of nodes')
 parser.add_argument('--batch_size',type=int,default=64,help='batch size')
 parser.add_argument('--learning_rate',type=float,default=0.001,help='learning rate')
 parser.add_argument('--dropout',type=float,default=0.3,help='dropout rate')
@@ -41,8 +41,11 @@ def main():
     #np.random.seed(args.seed)
     #load data
     device = torch.device(args.device)
-    sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
-    dataloader = util.load_dataset_syn(device, args.batch_size, args.batch_size, args.batch_size)
+    # sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
+    # dataloader = util.load_dataset(args.data, args.batch_size, args.batch_size, args.batch_size)
+    #TODO: currently len=1, 1 graph for all, need to generalize
+    dataloader, adj_mx = util.load_dataset_syn(args.adjtype, args.batch_size, 
+                                                args.batch_size, args.batch_size)
     scaler = dataloader['scaler']
     supports = [torch.tensor(i).to(device) for i in adj_mx]
 
@@ -55,7 +58,6 @@ def main():
 
     if args.aptonly:
         supports = None
-
 
 
     engine = trainer(scaler, args.in_dim, args.seq_length, args.num_nodes, args.nhid, args.dropout,
@@ -153,7 +155,7 @@ def main():
     amae = []
     amape = []
     armse = []
-    for i in range(12):
+    for i in range(args.seq_length):
         pred = scaler.inverse_transform(yhat[:,:,i])
         real = realy[:,:,i]
         metrics = util.metric(pred,real)
@@ -163,7 +165,7 @@ def main():
         amape.append(metrics[1])
         armse.append(metrics[2])
 
-    log = 'On average over 12 horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+    log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
     print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
     torch.save(engine.model.state_dict(), args.save+"_exp"+str(args.expid)+"_best_"+str(round(his_loss[bestid],2))+".pth")
 

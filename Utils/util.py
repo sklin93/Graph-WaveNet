@@ -9,7 +9,7 @@ from Utils import dataTools
 
 import ipdb
 
-class DataLoaderMetr(object):
+class DataLoader(object):
     def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
         """
         :param xs:
@@ -50,29 +50,6 @@ class DataLoaderMetr(object):
                 self.current_ind += 1
 
         return _wrapper()
-
-class DataLoaderSyn(object):
-    def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
-        """
-        :param xs:
-        :param ys:
-        :param batch_size:
-        :param pad_with_last_sample: pad with the last sample 
-         to make number of samples divisible to batch_size.
-        """
-        # TODO: 4 values
-        self.batch_size = batch_size
-        self.current_ind = 0
-        if pad_with_last_sample:
-            num_padding = (batch_size - (len(xs) % batch_size)) % batch_size
-            x_padding = np.repeat(xs[-1:], num_padding, axis=0)
-            y_padding = np.repeat(ys[-1:], num_padding, axis=0)
-            xs = np.concatenate([xs, x_padding], axis=0)
-            ys = np.concatenate([ys, y_padding], axis=0)
-        self.size = len(xs)
-        self.num_batch = int(self.size // self.batch_size)
-        self.xs = xs
-        self.ys = ys
 
     def shuffle(self):
         permutation = np.random.permutation(self.size)
@@ -168,8 +145,7 @@ def load_pickle(pickle_file):
         raise
     return pickle_data
 
-def load_adj(pkl_filename, adjtype):
-    sensor_ids, sensor_id_to_ind, adj_mx = load_pickle(pkl_filename)
+def mod_adj(adj_mx, adjtype):
     if adjtype == "scalap":
         adj = [calculate_scaled_laplacian(adj_mx)]
     elif adjtype == "normlap":
@@ -185,6 +161,11 @@ def load_adj(pkl_filename, adjtype):
     else:
         error = 0
         assert error, "adj type not defined"
+    return adj
+
+def load_adj(pkl_filename, adjtype):
+    sensor_ids, sensor_id_to_ind, adj_mx = load_pickle(pkl_filename)
+    adj = mod_adj(adj_mx, adjtype)
     return sensor_ids, sensor_id_to_ind, adj
 
 
@@ -198,15 +179,16 @@ def load_dataset_metr(dataset_dir, batch_size, valid_batch_size= None, test_batc
     # Data format
     for category in ['train', 'val', 'test']:
         data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
+    ipdb.set_trace()
     # x/y_train/val/test: (N, 12, 207, 2)
-    data['train_loader'] = DataLoaderMetr(data['x_train'], data['y_train'], batch_size)
-    data['val_loader'] = DataLoaderMetr(data['x_val'], data['y_val'], valid_batch_size)
-    data['test_loader'] = DataLoaderMetr(data['x_test'], data['y_test'], test_batch_size)
+    data['train_loader'] = DataLoader(data['x_train'], data['y_train'], batch_size)
+    data['val_loader'] = DataLoader(data['x_val'], data['y_val'], valid_batch_size)
+    data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size)
     data['scaler'] = scaler
     return data
 
-def load_dataset_syn(device, batch_size, valid_batch_size= None, test_batch_size=None
-                    same_G=True):
+def load_dataset_syn(adjtype, batch_size, valid_batch_size= None, test_batch_size=None, 
+                     same_G=True):
     # graph config
     nNodes = 80 #200 # Number of nodes (fMRI regions)
     graphType = 'SBM' # Type of graph
@@ -232,28 +214,25 @@ def load_dataset_syn(device, batch_size, valid_batch_size= None, test_batch_size
         G = graphTools.Graph(graphType, nNodes, graphOptions)
         G.computeGFT() # Compute the eigendecomposition of the stored GSO
         a = np.arange(G.N)
-        data = dataTools.MultiModalityPrediction(G, K, nTrain, nValid, nTest, num_timestep, 
+        _data = dataTools.MultiModalityPrediction(G, K, nTrain, nValid, nTest, num_timestep, 
                                                 F_t=F_t, pooltype='avg', #'avg', 'selectOne', 'weighted'
                                                 sigmaSpatial=sigmaSpatial, sigmaTemporal=sigmaTemporal,
                                                 rhoSpatial=rhoSpatial, rhoTemporal=rhoTemporal)
-        data.astype(torch.float64)
-        data.to(device)
-        ipdb.set_trace()
         data = {}
         for category in ['train', 'val', 'test']:
-            data['x_' + category] = data.getSamples(category)[0]
-            data['y_' + category] = data.getSamples(category)[1]
-            data['x1_' + category] = data.getSamples(category)[2]
-            data['y1_' + category] = data.getSamples(category)[3]
+            data['x_' + category], data['y_' + category] = _data.getSamples(category)
+
         scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), std=data['x_train'][..., 0].std())
         # Data format
         for category in ['train', 'val', 'test']:
             data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
-        data['train_loader'] = DataLoaderSyn(data['x_train'], data['y_train'], batch_size)
-        data['val_loader'] = DataLoaderSyn(data['x_val'], data['y_val'], valid_batch_size)
-        data['test_loader'] = DataLoaderSyn(data['x_test'], data['y_test'], test_batch_size)
+        # ipdb.set_trace()
+        data['train_loader'] = DataLoader(data['x_train'], data['y_train'], batch_size)
+        data['val_loader'] = DataLoader(data['x_val'], data['y_val'], valid_batch_size)
+        data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size)
         data['scaler'] = scaler
-        return data
+        adj = mod_adj(G.W, adjtype)
+        return data, adj
 
 def masked_mse(preds, labels, null_val=np.nan):
     if np.isnan(null_val):

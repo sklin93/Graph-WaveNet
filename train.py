@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 from engine import trainer
 import ipdb
 
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --seq_length 15 --data syn --blocks 5
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--device',type=str,default='cuda:0',help='')
 parser.add_argument('--data',type=str,default='data/METR-LA',help='data path')
@@ -20,6 +23,9 @@ parser.add_argument('--seq_length',type=int,default=15,help='')
 parser.add_argument('--nhid',type=int,default=32,help='')
 parser.add_argument('--in_dim',type=int,default=2,help='inputs dimension')
 parser.add_argument('--num_nodes',type=int,default=80,help='number of nodes')
+parser.add_argument('--layers',type=int,default=2,help='number of layers per gwnet block')
+parser.add_argument('--blocks',type=int,default=4,help='number of blocks in gwnet model')
+
 parser.add_argument('--batch_size',type=int,default=64,help='batch size')
 parser.add_argument('--learning_rate',type=float,default=0.001,help='learning rate')
 parser.add_argument('--dropout',type=float,default=0.3,help='dropout rate')
@@ -41,11 +47,17 @@ def main():
     #np.random.seed(args.seed)
     #load data
     device = torch.device(args.device)
-    # sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
-    # dataloader = util.load_dataset(args.data, args.batch_size, args.batch_size, args.batch_size)
+
     #TODO: currently len=1, 1 graph for all, need to generalize
-    dataloader, adj_mx = util.load_dataset_syn(args.adjtype, args.batch_size, 
-                                                args.batch_size, args.batch_size)
+    if args.data == 'syn':
+        dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.batch_size, 
+                                                    args.batch_size, args.batch_size)
+
+    else:
+        sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
+        dataloader = util.load_dataset_metr(args.data, args.batch_size, args.batch_size, 
+                                            args.batch_size)
+    
     scaler = dataloader['scaler']
     supports = [torch.tensor(i).to(device) for i in adj_mx]
 
@@ -61,8 +73,8 @@ def main():
 
 
     engine = trainer(scaler, args.in_dim, args.seq_length, args.num_nodes, args.nhid, args.dropout,
-                         args.learning_rate, args.weight_decay, device, supports, args.gcn_bool, args.addaptadj,
-                         adjinit)
+                         args.learning_rate, args.weight_decay, device, supports, args.gcn_bool, 
+                         args.addaptadj, adjinit, args.blocks, args.layers)
 
 
     print("start training...",flush=True)
@@ -84,7 +96,10 @@ def main():
             trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 207, 12])
             trainy = torch.Tensor(y).to(device)
             trainy = trainy.transpose(1, 3)
-            metrics = engine.train(trainx, trainy[:,0,:,:])
+            if args.data == 'syn':
+                metrics = engine.train_syn(trainx, trainy, F_t, G)
+            else:
+                metrics = engine.train(trainx, trainy[:,0,:,:])
             train_loss.append(metrics[0])
             train_mape.append(metrics[1])
             train_rmse.append(metrics[2])

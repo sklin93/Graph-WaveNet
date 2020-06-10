@@ -47,7 +47,11 @@ class gcn(nn.Module):
 
 
 class gwnet(nn.Module):
-    def __init__(self, device, num_nodes, dropout=0.3, supports=None, gcn_bool=True, addaptadj=True, aptinit=None, in_dim=2,out_dim=12,residual_channels=32,dilation_channels=32,skip_channels=256,end_channels=512,kernel_size=2,blocks=4,layers=2):
+    def __init__(self, device, num_nodes, dropout=0.3, supports=None, 
+                gcn_bool=True, addaptadj=True, aptinit=None, 
+                in_dim=2,out_dim=12,residual_channels=32,dilation_channels=32,
+                skip_channels=256,end_channels=512,kernel_size=2,blocks=4,layers=2):
+
         super(gwnet, self).__init__()
         self.dropout = dropout
         self.blocks = blocks
@@ -138,7 +142,7 @@ class gwnet(nn.Module):
 
 
 
-    def forward(self, input):
+    def forward(self, input): #[64, 2, 207, 13]
         in_len = input.size(3)
         if in_len<self.receptive_field:
             x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
@@ -197,12 +201,12 @@ class gwnet(nn.Module):
 
             x = x + residual[:, :, :, -x.size(3):]
 
-
             x = self.bn[i](x)
 
         x = F.relu(skip)
         x = F.relu(self.end_conv_1(x))
-        x = self.end_conv_2(x)
+        x = self.end_conv_2(x) #[64, 12, 207, 1] 
+        # ipdb.set_trace()
         return x
 
 

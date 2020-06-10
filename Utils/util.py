@@ -179,7 +179,6 @@ def load_dataset_metr(dataset_dir, batch_size, valid_batch_size= None, test_batc
     # Data format
     for category in ['train', 'val', 'test']:
         data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
-    ipdb.set_trace()
     # x/y_train/val/test: (N, 12, 207, 2)
     data['train_loader'] = DataLoader(data['x_train'], data['y_train'], batch_size)
     data['val_loader'] = DataLoader(data['x_val'], data['y_val'], valid_batch_size)
@@ -232,7 +231,7 @@ def load_dataset_syn(adjtype, batch_size, valid_batch_size= None, test_batch_siz
         data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size)
         data['scaler'] = scaler
         adj = mod_adj(G.W, adjtype)
-        return data, adj
+        return data, adj, F_t, G
 
 def masked_mse(preds, labels, null_val=np.nan):
     if np.isnan(null_val):

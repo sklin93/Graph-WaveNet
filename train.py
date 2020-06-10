@@ -8,7 +8,7 @@ from engine import trainer
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --seq_length 15 --data syn --blocks 5
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 5
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--device',type=str,default='cuda:0',help='')
@@ -50,8 +50,9 @@ def main():
 
     #TODO: currently len=1, 1 graph for all, need to generalize
     if args.data == 'syn':
-        dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.batch_size, 
-                                                    args.batch_size, args.batch_size)
+        dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.seq_length,
+                                                           args.batch_size, args.batch_size, 
+                                                           args.batch_size, same_G=False)
 
     else:
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)

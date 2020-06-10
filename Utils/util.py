@@ -8,6 +8,7 @@ from Utils import graphTools
 from Utils import dataTools
 
 import ipdb
+from tqdm import tqdm
 
 class DataLoader(object):
     def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
@@ -186,8 +187,13 @@ def load_dataset_metr(dataset_dir, batch_size, valid_batch_size= None, test_batc
     data['scaler'] = scaler
     return data
 
-def load_dataset_syn(adjtype, batch_size, valid_batch_size= None, test_batch_size=None, 
-                     same_G=True):
+def load_dataset_syn(adjtype, K, batch_size, valid_batch_size= None, test_batch_size=None, 
+                     same_G=True, pooltype='avg'): 
+    '''
+    K: K-step prediction (also K step input)
+    same_G: whether all samples have a same graph structure or not
+    pooltype: can be 'avg','selectOne','weighted'
+    '''
     # graph config
     nNodes = 80 #200 # Number of nodes (fMRI regions)
     graphType = 'SBM' # Type of graph
@@ -200,8 +206,7 @@ def load_dataset_syn(adjtype, batch_size, valid_batch_size= None, test_batch_siz
     nValid = int(0.25 * nTrain) # Number of validation samples
     nTest = int(0.05 * nTrain) # Number of testing samples
     num_timestep = 1000
-    F_t = 5
-    K = F_t * 3 # K-step prediction. need K%F_t==0 for a cleaner fMRI cut
+    F_t = K // 3 # need K%F_t==0 for a cleaner fMRI cut
     # noise parameters
     sigmaSpatial = 0.1
     sigmaTemporal = 0.1
@@ -212,26 +217,77 @@ def load_dataset_syn(adjtype, batch_size, valid_batch_size= None, test_batch_siz
         # data generation
         G = graphTools.Graph(graphType, nNodes, graphOptions)
         G.computeGFT() # Compute the eigendecomposition of the stored GSO
-        a = np.arange(G.N)
         _data = dataTools.MultiModalityPrediction(G, K, nTrain, nValid, nTest, num_timestep, 
-                                                F_t=F_t, pooltype='avg', #'avg', 'selectOne', 'weighted'
-                                                sigmaSpatial=sigmaSpatial, sigmaTemporal=sigmaTemporal,
-                                                rhoSpatial=rhoSpatial, rhoTemporal=rhoTemporal)
+                                                  F_t=F_t, pooltype=pooltype, 
+                                                  sigmaSpatial=sigmaSpatial, 
+                                                  sigmaTemporal=sigmaTemporal,
+                                                  rhoSpatial=rhoSpatial, 
+                                                  rhoTemporal=rhoTemporal)
         data = {}
         for category in ['train', 'val', 'test']:
             data['x_' + category], data['y_' + category] = _data.getSamples(category)
 
-        scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), std=data['x_train'][..., 0].std())
+        scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), 
+                                std=data['x_train'][..., 0].std())
         # Data format
         for category in ['train', 'val', 'test']:
             data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
-        # ipdb.set_trace()
+        
         data['train_loader'] = DataLoader(data['x_train'], data['y_train'], batch_size)
         data['val_loader'] = DataLoader(data['x_val'], data['y_val'], valid_batch_size)
         data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size)
         data['scaler'] = scaler
         adj = mod_adj(G.W, adjtype)
         return data, adj, F_t, G
+    else:
+        nTotal = nTrain + nValid + nTest
+        Gs = []
+        adjs = []
+        xs = []
+        ys = []
+        for i in tqdm(range(nTotal)):
+            G = graphTools.Graph(graphType, nNodes, graphOptions)
+            G.computeGFT()
+            _data = dataTools.MultiModalityPrediction(G, K, 1, 0, 0, num_timestep, 
+                                                      F_t=F_t, pooltype=pooltype, 
+                                                      sigmaSpatial=sigmaSpatial, 
+                                                      sigmaTemporal=sigmaTemporal,
+                                                      rhoSpatial=rhoSpatial, 
+                                                      rhoTemporal=rhoTemporal)
+            x, y = _data.getSamples('train') # (971, 15, 80, 2)
+            xs.append(x)
+            ys.append(y)
+            Gs.append(G)
+            adjs.append(mod_adj(G.W, adjtype))
+
+        xs = np.stack(xs)
+        ys = np.stack(ys)
+
+        data = {}
+        data['x_train'], data['y_train'] = xs[:nTrain], ys[:nTrain]
+        data['x_val'], data['y_val'] = xs[nTrain:-nTest], ys[nTrain:-nTest]
+        data['x_test'], data['y_test'] = xs[-nTest:], ys[-nTest:]
+
+        for _, v in data.items():
+            # batching 1 : train model on one subject then finetune
+            v = v.reshape(-1, *v.shape[2:])
+            # # batching 2 : each batch contains different subject
+            # v = np.transpose(v, (1,0,2,3,4)).reshape(-1, *v.shape[2:])
+
+        scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), 
+                                std=data['x_train'][..., 0].std())
+        # Data format
+        for category in ['train', 'val', 'test']:
+            data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
+        
+        data['train_loader'] = DataLoader(data['x_train'], data['y_train'], batch_size)
+        data['val_loader'] = DataLoader(data['x_val'], data['y_val'], valid_batch_size)
+        data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size)
+        data['scaler'] = scaler
+        
+        return data, adjs, F_t, Gs
+
+
 
 def masked_mse(preds, labels, null_val=np.nan):
     if np.isnan(null_val):

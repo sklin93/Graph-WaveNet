@@ -133,7 +133,8 @@ def main():
                 trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 80, 15])
                 trainy = torch.Tensor(y).to(device)
                 trainy = trainy.transpose(1, 3)
-                metrics = engine.train_syn(trainx, trainy, F_t, G, adj_idx)
+                
+                metrics = engine.train_syn(trainx, trainy, F_t, G['train'], adj_idx)
                 train_loss.append(metrics[0])
                 train_mape.append(metrics[1])
                 train_rmse.append(metrics[2])
@@ -143,20 +144,21 @@ def main():
 
             t2 = time.time()
             train_time.append(t2-t1)
+
             #validation
             valid_loss = []
             valid_mape = []
             valid_rmse = []
 
-
             s1 = time.time()
             engine.set_state('val')
-            for iter, (x, y) in enumerate(dataloader['val_loader'].get_iterator()):
+            for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
                 testx = torch.Tensor(x).to(device)
                 testx = testx.transpose(1, 3)
                 testy = torch.Tensor(y).to(device)
                 testy = testy.transpose(1, 3)
-                metrics = engine.eval(testx, testy[:,0,:,:])
+                # [64, 2, 80, 15]
+                metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
                 valid_loss.append(metrics[0])
                 valid_mape.append(metrics[1])
                 valid_rmse.append(metrics[2])

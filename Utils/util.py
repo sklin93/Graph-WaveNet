@@ -287,10 +287,11 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         xs = np.stack(xs)
         ys = np.stack(ys)
 
+        G = {}
         data = {}
-        data['x_train'], data['y_train'] = xs[:nTrain], ys[:nTrain]
-        data['x_val'], data['y_val'] = xs[nTrain:-nTest], ys[nTrain:-nTest]
-        data['x_test'], data['y_test'] = xs[-nTest:], ys[-nTest:]
+        data['x_train'], data['y_train'], G['train'] = xs[:nTrain], ys[:nTrain], Gs[:nTrain]
+        data['x_val'], data['y_val'], G['val'] = xs[nTrain:-nTest], ys[nTrain:-nTest], Gs[nTrain:-nTest]
+        data['x_test'], data['y_test'], G['test'] = xs[-nTest:], ys[-nTest:], Gs[-nTest:]
 
         data['train_adj_idx'] = np.arange(nTrain).reshape(-1,1).repeat(
                                                 data['x_train'].shape[1],axis=1)
@@ -319,8 +320,7 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
                                              data['test_adj_idx'], test_batch_size)
         data['scaler'] = scaler
         
-        return data, adjs, F_t, Gs
-
+        return data, adjs, F_t, G
 
 
 def masked_mse(preds, labels, null_val=np.nan):

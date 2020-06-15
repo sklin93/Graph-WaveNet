@@ -93,6 +93,14 @@ class trainer():
                 for k in range(len(assign_dict)):
                     predict[:,:,assign_dict[k],:] = predict[:,:,assign_dict[k],:].\
                                 mean(2, keepdim=True).repeat(1,1,len(assign_dict[k]),1)
+            else: # different graph structure for each sample
+                for sample in range(len(predict)):
+                    assign_dict = G[adj_idx[sample]].assign_dict
+                    for k in range(len(assign_dict)):
+                        predict[sample:sample+1, :,assign_dict[k],:] = \
+                        predict[sample:sample+1,:,assign_dict[k],:].mean(2, 
+                            keepdim=True).repeat(1,1,len(assign_dict[k]),1)
+
         elif pooltype == 'subsample':
             pass #TODO
 
@@ -114,6 +122,47 @@ class trainer():
         real = torch.unsqueeze(real_val,dim=1)
         predict = self.scaler.inverse_transform(output)
         loss = self.loss(predict, real, 0.0)
+        mape = util.masked_mape(predict,real,0.0).item()
+        rmse = util.masked_rmse(predict,real,0.0).item()
+        return loss.item(),mape,rmse
+
+    def eval_syn(self, input, real, F_t, G, adj_idx, pooltype='avg'):
+        self.model.eval()
+        input = nn.functional.pad(input,(1,0,0,0))
+        supports = self.supports[self.state]
+        supports = [supports[i][adj_idx] for i in range(len(supports))]
+        aptinit = self.aptinit[self.state]
+        if aptinit is not None:
+            aptinit = aptinit[adj_idx]
+
+        output = self.model(input, supports, aptinit)
+        output = output.transpose(1,3)
+        predict = self.scaler.inverse_transform(output)
+
+        if pooltype == 'avg':
+            # F from predict & expand
+            F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
+            F = F.unsqueeze(-1).repeat(*[1]*len(F.shape), F_t)
+            F = F.view(*F.shape[:-2], -1)
+            # E from predict & expand
+            if not type(G) == list:
+                # if all the graphs share a same cluster structure
+                assign_dict = G.assign_dict
+                for k in range(len(assign_dict)):
+                    predict[:,:,assign_dict[k],:] = predict[:,:,assign_dict[k],:].\
+                                mean(2, keepdim=True).repeat(1,1,len(assign_dict[k]),1)
+            else: # different graph structure for each sample
+                for sample in range(len(predict)):
+                    assign_dict = G[adj_idx[sample]].assign_dict
+                    for k in range(len(assign_dict)):
+                        predict[sample:sample+1, :,assign_dict[k],:] = \
+                        predict[sample:sample+1,:,assign_dict[k],:].mean(2, 
+                            keepdim=True).repeat(1,1,len(assign_dict[k]),1)
+
+        elif pooltype == 'subsample':
+            pass #TODO
+
+        loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
         return loss.item(),mape,rmse

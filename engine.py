@@ -8,16 +8,32 @@ class trainer():
                 dropout, lrate, wdecay, device, supports, gcn_bool,
                 addaptadj, aptinit, blocks, layers):
 
-        self.model = gwnet(device, num_nodes, dropout, supports=supports, 
-                           gcn_bool=gcn_bool, addaptadj=addaptadj, aptinit=aptinit, 
-                           in_dim=in_dim, out_dim=seq_length, residual_channels=nhid, 
-                           dilation_channels=nhid, skip_channels=nhid*8, end_channels=nhid*16,
-                           blocks=blocks, layers=layers)
+        if type(supports) == dict: # different graph structure for each sample
+            for k in supports: 
+                supports_len = len(supports[k])
+                break
+            if gcn_bool and addaptadj:
+                supports_len += 1
+
+            self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
+                               gcn_bool=gcn_bool, addaptadj=addaptadj,
+                               in_dim=in_dim, out_dim=seq_length, residual_channels=nhid, 
+                               dilation_channels=nhid, skip_channels=nhid*8, end_channels=nhid*16,
+                               blocks=blocks, layers=layers)
+        else:
+            self.model = gwnet(device, num_nodes, dropout, supports=supports, 
+                               gcn_bool=gcn_bool, addaptadj=addaptadj, aptinit=aptinit, 
+                               in_dim=in_dim, out_dim=seq_length, residual_channels=nhid, 
+                               dilation_channels=nhid, skip_channels=nhid*8, end_channels=nhid*16,
+                               blocks=blocks, layers=layers)
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
         self.loss = util.masked_mae
         self.scaler = scaler
         self.clip = 5
+        self.supports = supports
+        self.aptinit = aptinit
+        self.state = None
 
     def train(self, input, real_val):
         self.model.train()
@@ -38,13 +54,30 @@ class trainer():
         rmse = util.masked_rmse(predict,real,0.0).item()
         return loss.item(),mape,rmse
 
-    def train_syn(self, input, real, F_t, G, pooltype='avg'):
+    def set_state(self, state):
+        assert state == 'train' or state == 'val' or state == 'test'
+        self.state = state
+
+    def train_syn(self, input, real, F_t, G, adj_idx=None, pooltype='avg'):
         '''output p=1 sequence, then deteministically subsample/average to F and E'''
 
         self.model.train()
         self.optimizer.zero_grad()
         input = nn.functional.pad(input,(1,0,0,0))
-        output = self.model(input)  #[batch_size, seq_len, num_nodes, 1]
+
+        if adj_idx is not None: # different graph structure for each sample
+            assert self.state is not None, 'set train/val/test state first'
+
+            supports = self.supports[self.state]
+            supports = [supports[i][adj_idx] for i in range(len(supports))]
+            aptinit = self.aptinit[self.state]
+            if aptinit is not None:
+                aptinit = aptinit[adj_idx]
+
+            output = self.model(input, supports, aptinit)
+        else:
+            output = self.model(input)  #[batch_size, seq_len, num_nodes, 1]
+
         output = output.transpose(1,3)
         predict = self.scaler.inverse_transform(output)
         

@@ -52,11 +52,38 @@ class DataLoader(object):
 
         return _wrapper()
 
-    def shuffle(self):
-        permutation = np.random.permutation(self.size)
-        xs, ys = self.xs[permutation], self.ys[permutation]
+class DataLoader_syn(object):
+    def __init__(self, xs, ys, adj_idx, batch_size, pad_with_last_sample=True):
+        """
+        :param xs:
+        :param ys:
+        :param batch_size:
+        :param pad_with_last_sample: pad with the last sample 
+         to make number of samples divisible to batch_size.
+        """
+        self.batch_size = batch_size
+        self.current_ind = 0
+        if pad_with_last_sample:
+            num_padding = (batch_size - (len(xs) % batch_size)) % batch_size
+            x_padding = np.repeat(xs[-1:], num_padding, axis=0)
+            y_padding = np.repeat(ys[-1:], num_padding, axis=0)
+            adj_idx_padding = np.repeat(adj_idx[-1:], num_padding, axis=0)
+            xs = np.concatenate([xs, x_padding], axis=0)
+            ys = np.concatenate([ys, y_padding], axis=0)
+            adj_idx = np.concatenate([adj_idx, adj_idx_padding], axis=0)
+        self.size = len(xs)
+        self.num_batch = int(self.size // self.batch_size)
         self.xs = xs
         self.ys = ys
+        self.adj_idx = adj_idx
+
+    def shuffle(self):
+        permutation = np.random.permutation(self.size)
+        xs, ys, adj_idx = self.xs[permutation], self.ys[permutation], \
+                          self.adj_idx[permutation]
+        self.xs = xs
+        self.ys = ys
+        self.adj_idx = adj_idx
 
     def get_iterator(self):
         self.current_ind = 0
@@ -67,7 +94,8 @@ class DataLoader(object):
                 end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
                 x_i = self.xs[start_ind: end_ind, ...]
                 y_i = self.ys[start_ind: end_ind, ...]
-                yield (x_i, y_i)
+                adj_i = self.adj_idx[start_ind: end_ind, ...]
+                yield (x_i, y_i, adj_i)
                 self.current_ind += 1
 
         return _wrapper()
@@ -187,7 +215,8 @@ def load_dataset_metr(dataset_dir, batch_size, valid_batch_size= None, test_batc
     data['scaler'] = scaler
     return data
 
-def load_dataset_syn(adjtype, K, batch_size, valid_batch_size= None, test_batch_size=None, 
+def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K, 
+                     batch_size, valid_batch_size= None, test_batch_size=None, 
                      same_G=True, pooltype='avg'): 
     '''
     K: K-step prediction (also K step input)
@@ -195,17 +224,12 @@ def load_dataset_syn(adjtype, K, batch_size, valid_batch_size= None, test_batch_
     pooltype: can be 'avg','selectOne','weighted'
     '''
     # graph config
-    nNodes = 80 #200 # Number of nodes (fMRI regions)
     graphType = 'SBM' # Type of graph
     graphOptions = {}
     graphOptions['nCommunities'] = 5 #64 # Number of communities (EEG node number)
     graphOptions['probIntra'] = 0.8 # Intracommunity probability
     graphOptions['probInter'] = 0.2 # Intercommunity probability
     # sample config
-    nTrain = 40 # Number of training samples
-    nValid = int(0.25 * nTrain) # Number of validation samples
-    nTest = int(0.05 * nTrain) # Number of testing samples
-    num_timestep = 1000
     F_t = K // 3 # need K%F_t==0 for a cleaner fMRI cut
     # noise parameters
     sigmaSpatial = 0.1
@@ -268,9 +292,16 @@ def load_dataset_syn(adjtype, K, batch_size, valid_batch_size= None, test_batch_
         data['x_val'], data['y_val'] = xs[nTrain:-nTest], ys[nTrain:-nTest]
         data['x_test'], data['y_test'] = xs[-nTest:], ys[-nTest:]
 
-        for _, v in data.items():
+        data['train_adj_idx'] = np.arange(nTrain).reshape(-1,1).repeat(
+                                                data['x_train'].shape[1],axis=1)
+        data['val_adj_idx'] = np.arange(nValid).reshape(-1,1).repeat(
+                                                data['x_val'].shape[1],axis=1)
+        data['test_adj_idx'] = np.arange(nTest).reshape(-1,1).repeat(
+                                                data['x_test'].shape[1],axis=1)
+        
+        for k, v in data.items():
             # batching 1 : train model on one subject then finetune
-            v = v.reshape(-1, *v.shape[2:])
+            data[k] = v.reshape(-1, *v.shape[2:])
             # # batching 2 : each batch contains different subject
             # v = np.transpose(v, (1,0,2,3,4)).reshape(-1, *v.shape[2:])
 
@@ -280,9 +311,12 @@ def load_dataset_syn(adjtype, K, batch_size, valid_batch_size= None, test_batch_
         for category in ['train', 'val', 'test']:
             data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
         
-        data['train_loader'] = DataLoader(data['x_train'], data['y_train'], batch_size)
-        data['val_loader'] = DataLoader(data['x_val'], data['y_val'], valid_batch_size)
-        data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size)
+        data['train_loader'] = DataLoader_syn(data['x_train'], data['y_train'], 
+                                              data['train_adj_idx'], batch_size)
+        data['val_loader'] = DataLoader_syn(data['x_val'], data['y_val'], 
+                                            data['val_adj_idx'], valid_batch_size)
+        data['test_loader'] = DataLoader_syn(data['x_test'], data['y_test'],
+                                             data['test_adj_idx'], test_batch_size)
         data['scaler'] = scaler
         
         return data, adjs, F_t, Gs

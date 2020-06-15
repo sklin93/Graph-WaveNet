@@ -46,6 +46,7 @@ def main():
     #torch.manual_seed(args.seed)
     #np.random.seed(args.seed)
     #load data
+    same_G = False
     device = torch.device(args.device)
 
     #TODO: currently len=1, 1 graph for all, need to generalize
@@ -58,14 +59,14 @@ def main():
                                                            nTrain, nValid, nTest, num_timestep,
                                                            args.seq_length, args.batch_size, 
                                                            args.batch_size, args.batch_size, 
-                                                           same_G=False)
+                                                           same_G=same_G)
     else:
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
         dataloader = util.load_dataset_metr(args.data, args.batch_size, args.batch_size, 
                                             args.batch_size)
         
 
-    if args.data == 'syn' and len(adj_mx) > 2: # different graph structure for each sample
+    if args.data == 'syn' and not same_G: # different graph structure for each sample
         assert len(adj_mx) == nTrain + nValid + nTest
 
         # separate adj matrices into train-val-test samples
@@ -220,7 +221,7 @@ def main():
                 trainy = torch.Tensor(y).to(device)
                 trainy = trainy.transpose(1, 3)
                 if args.data == 'syn':
-                    metrics = engine.train_syn(trainx, trainy[:,0,:,:])
+                    metrics = engine.train_syn(trainx, trainy)
                 else:
                     metrics = engine.train(trainx, trainy[:,0,:,:])
                 train_loss.append(metrics[0])
@@ -243,10 +244,14 @@ def main():
                 testx = testx.transpose(1, 3)
                 testy = torch.Tensor(y).to(device)
                 testy = testy.transpose(1, 3)
-                metrics = engine.eval(testx, testy[:,0,:,:])
+                if args.data == 'syn':
+                    metrics = engine.eval_syn(testx, testy, F_t, G)
+                else:
+                    metrics = engine.eval(testx, testy[:,0,:,:])
                 valid_loss.append(metrics[0])
                 valid_mape.append(metrics[1])
                 valid_rmse.append(metrics[2])
+            
             s2 = time.time()
             log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
             print(log.format(i,(s2-s1)))
@@ -266,47 +271,79 @@ def main():
         print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
         print("Average Inference Time: {:.4f} secs".format(np.mean(val_time)))
 
-    #testing
+
+    ################################ TESTING ################################
     bestid = np.argmin(his_loss)
-    engine.model.load_state_dict(torch.load(args.save+"_epoch_"+str(bestid+1)+"_"+str(round(his_loss[bestid],2))+".pth"))
-
-
-    outputs = []
-    realy = torch.Tensor(dataloader['y_test']).to(device)
-    realy = realy.transpose(1,3)[:,0,:,:]
-
-    for iter, (x, y) in enumerate(dataloader['test_loader'].get_iterator()):
-        testx = torch.Tensor(x).to(device)
-        testx = testx.transpose(1,3)
-        with torch.no_grad():
-            preds = engine.model(testx).transpose(1,3)
-        outputs.append(preds.squeeze())
-
-    yhat = torch.cat(outputs,dim=0)
-    yhat = yhat[:realy.size(0),...]
-
 
     print("Training finished")
     print("The valid loss on best model is", str(round(his_loss[bestid],4)))
 
+    engine.model.load_state_dict(torch.load(args.save+"_epoch_"+str(bestid+1)+"_"+str(round(his_loss[bestid],2))+".pth"))
 
     amae = []
     amape = []
     armse = []
-    for i in range(args.seq_length):
-        pred = scaler.inverse_transform(yhat[:,:,i])
-        real = realy[:,:,i]
-        metrics = util.metric(pred,real)
-        log = 'Evaluate best model on test data for horizon {:d}, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
-        print(log.format(i+1, metrics[0], metrics[1], metrics[2]))
-        amae.append(metrics[0])
-        amape.append(metrics[1])
-        armse.append(metrics[2])
 
-    log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
-    print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
-    torch.save(engine.model.state_dict(), args.save+"_exp"+str(args.expid)+"_best_"+str(round(his_loss[bestid],2))+".pth")
+    if args.data == 'syn':
+        if same_G:
+            for iter, (x, y) in enumerate(dataloader['test_loader'].get_iterator()):
+                testx = torch.Tensor(x).to(device)
+                testx = testx.transpose(1, 3)
+                testy = torch.Tensor(y).to(device)
+                testy = testy.transpose(1, 3)
+                # [64, 2, 80, 15]
+                metrics = engine.eval_syn(testx, testy, F_t, G) 
+                ipdb.set_trace() #TODO: set epoch to 1 and check test code : metrics shape
+                amae.append(metrics[0])
+                amape.append(metrics[1])
+                armse.append(metrics[2])
 
+        else:
+            engine.set_state('test')
+            for iter, (x, y, adj_idx) in enumerate(dataloader['test_loader'].get_iterator()):
+                testx = torch.Tensor(x).to(device)
+                testx = testx.transpose(1, 3)
+                testy = torch.Tensor(y).to(device)
+                testy = testy.transpose(1, 3)
+                # [64, 2, 80, 15]
+                metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx) 
+                ipdb.set_trace() #TODO: set epoch to 1 and check test code : metrics shape
+                amae.append(metrics[0])
+                amape.append(metrics[1])
+                armse.append(metrics[2])
+        
+        log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+        print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
+        torch.save(engine.model.state_dict(), args.save+"_exp"+str(args.expid)+"_best_"+str(round(his_loss[bestid],2))+".pth")
+    
+    else:
+        outputs = []
+        realy = torch.Tensor(dataloader['y_test']).to(device)
+        realy = realy.transpose(1,3)[:,0,:,:]
+
+        for iter, (x, y) in enumerate(dataloader['test_loader'].get_iterator()):
+            testx = torch.Tensor(x).to(device)
+            testx = testx.transpose(1,3)
+            with torch.no_grad():
+                preds = engine.model(testx).transpose(1,3)
+            outputs.append(preds.squeeze())
+
+        yhat = torch.cat(outputs,dim=0)
+        yhat = yhat[:realy.size(0),...]
+
+        for i in range(args.seq_length):
+            pred = scaler.inverse_transform(yhat[:,:,i])
+            real = realy[:,:,i]
+            metrics = util.metric(pred,real)
+            log = 'Evaluate best model on test data for horizon {:d}, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+            print(log.format(i+1, metrics[0], metrics[1], metrics[2]))
+            amae.append(metrics[0])
+            amape.append(metrics[1])
+            armse.append(metrics[2])
+
+        log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+        print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
+        torch.save(engine.model.state_dict(), args.save+"_exp"+str(args.expid)+"_best_"+str(round(his_loss[bestid],2))+".pth")
 
 
 if __name__ == "__main__":

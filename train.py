@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from engine import trainer
 import ipdb
 
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 5
 
 parser = argparse.ArgumentParser()
@@ -33,7 +33,7 @@ parser.add_argument('--weight_decay',type=float,default=0.0001,help='weight deca
 parser.add_argument('--epochs',type=int,default=100,help='')
 parser.add_argument('--print_every',type=int,default=50,help='')
 #parser.add_argument('--seed',type=int,default=99,help='random seed')
-parser.add_argument('--save',type=str,default='./garage/metr',help='save path')
+parser.add_argument('--save',type=str,default='./garage/syn',help='save path')
 parser.add_argument('--expid',type=int,default=1,help='experiment id')
 
 args = parser.parse_args()
@@ -49,7 +49,6 @@ def main():
     same_G = False
     device = torch.device(args.device)
 
-    #TODO: currently len=1, 1 graph for all, need to generalize
     if args.data == 'syn':
         nTrain = 40 # Number of training samples
         nValid = int(0.25 * nTrain) # Number of validation samples
@@ -221,7 +220,7 @@ def main():
                 trainy = torch.Tensor(y).to(device)
                 trainy = trainy.transpose(1, 3)
                 if args.data == 'syn':
-                    metrics = engine.train_syn(trainx, trainy)
+                    metrics = engine.train_syn(trainx, trainy, F_t, G)
                 else:
                     metrics = engine.train(trainx, trainy[:,0,:,:])
                 train_loss.append(metrics[0])
@@ -251,7 +250,7 @@ def main():
                 valid_loss.append(metrics[0])
                 valid_mape.append(metrics[1])
                 valid_rmse.append(metrics[2])
-            
+
             s2 = time.time()
             log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
             print(log.format(i,(s2-s1)))
@@ -292,8 +291,7 @@ def main():
                 testy = torch.Tensor(y).to(device)
                 testy = testy.transpose(1, 3)
                 # [64, 2, 80, 15]
-                metrics = engine.eval_syn(testx, testy, F_t, G) 
-                ipdb.set_trace() #TODO: set epoch to 1 and check test code : metrics shape
+                metrics = engine.eval_syn(testx, testy, F_t, G)
                 amae.append(metrics[0])
                 amape.append(metrics[1])
                 armse.append(metrics[2])
@@ -306,8 +304,7 @@ def main():
                 testy = torch.Tensor(y).to(device)
                 testy = testy.transpose(1, 3)
                 # [64, 2, 80, 15]
-                metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx) 
-                ipdb.set_trace() #TODO: set epoch to 1 and check test code : metrics shape
+                metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
                 amae.append(metrics[0])
                 amape.append(metrics[1])
                 armse.append(metrics[2])

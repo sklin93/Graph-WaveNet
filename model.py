@@ -18,7 +18,6 @@ class nconv2(nn.Module):
         super(nconv2,self).__init__()
 
     def forward(self,x, A):
-        #TODO: check the correctness of einsum funciton
         x = torch.einsum('ncvl,nvw->ncwl',(x,A))
         return x.contiguous()
 
@@ -349,7 +348,6 @@ class gwnet_diff_G(nn.Module):
         # calculate the current adaptive adj matrix once per iteration
         new_supports = None
         if self.gcn_bool and self.addaptadj and supports is not None:
-            # TODO: confirm softmax axis is 2
             adp = F.softmax(F.relu(torch.matmul(nodevec1, nodevec2)), dim=2)
             new_supports = supports + [adp]
 

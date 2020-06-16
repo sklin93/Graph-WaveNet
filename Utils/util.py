@@ -322,6 +322,28 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         
         return data, adjs, F_t, G
 
+def reverse_sliding_window(li):
+    '''
+    takes in a list, each with dimension [num_window, num_nodes, window_width]
+    stepsize (each window's starting index discrepancy) is 1 for this function
+    return a list, each with dimension [num_nodes, num_timesteps]
+    '''
+    def _rev(a):
+        assert len(a.shape) == 3
+        num_window, num_nodes, width = a.shape
+        num_t = num_window + width - 1
+
+        a = a.transpose(0, 2, 1)
+        idxer = np.arange(width)[None, :] + np.arange(num_window)[:, None]
+        rev = np.zeros((num_nodes, num_t))
+        for l in range(num_t):
+            rev[:, l] = a[idxer == l].mean(0)
+        return rev
+
+    ret = []
+    for i in li:
+        ret.append(_rev(i))
+    return ret
 
 def masked_mse(preds, labels, null_val=np.nan):
     if np.isnan(null_val):

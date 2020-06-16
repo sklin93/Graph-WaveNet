@@ -143,6 +143,8 @@ class MultiModalityPrediction():
         # E_idxer = np.arange(K)[None, :] + np.arange(horizon-K+1)[:, None]
         # E_signals = E[:, E_idxer[:-K], :]
         # E_labels = E[:, E_idxer[K:], :]
+
+        # sliding window indexer
         idxer = np.arange(K)[None, :] + np.arange(horizon-K+1)[:, None]
         signals = FE[:, idxer[:-K], :, :]
         labels = FE[:, idxer[K:], :, :]

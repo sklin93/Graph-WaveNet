@@ -3,8 +3,10 @@ import numpy as np
 import argparse
 import time
 import Utils.util as util
-import matplotlib.pyplot as plt
 from engine import trainer
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
@@ -32,16 +34,20 @@ parser.add_argument('--dropout',type=float,default=0.3,help='dropout rate')
 parser.add_argument('--weight_decay',type=float,default=0.0001,help='weight decay rate')
 parser.add_argument('--epochs',type=int,default=100,help='')
 parser.add_argument('--print_every',type=int,default=50,help='')
-#parser.add_argument('--seed',type=int,default=99,help='random seed')
+# parser.add_argument('--seed',type=int,default=0,help='random seed')
 parser.add_argument('--save',type=str,default='./garage/syn',help='save path')
 parser.add_argument('--expid',type=int,default=1,help='experiment id')
 
 args = parser.parse_args()
 
+np.random.seed(0)
+torch.manual_seed(999)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(999)
 
 
 
-def main():
+def main(model_name=None): # for directly loading trained model
     #set seed
     #torch.manual_seed(args.seed)
     #np.random.seed(args.seed)
@@ -110,76 +116,76 @@ def main():
                          args.learning_rate, args.weight_decay, device, supports, args.gcn_bool, 
                          args.addaptadj, adjinit, args.blocks, args.layers)
 
+        if model_name is None:
+            print("start training...",flush=True)
 
-        print("start training...",flush=True)
+            his_loss =[]
+            val_time = []
+            train_time = []
+            for i in range(1,args.epochs+1):
+                #if i % 10 == 0:
+                    #lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
+                    #for g in engine.optimizer.param_groups:
+                        #g['lr'] = lr
+                train_loss = []
+                train_mape = []
+                train_rmse = []
+                t1 = time.time()
+                dataloader['train_loader'].shuffle()
+                engine.set_state('train')
 
-        his_loss =[]
-        val_time = []
-        train_time = []
-        for i in range(1,args.epochs+1):
-            #if i % 10 == 0:
-                #lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
-                #for g in engine.optimizer.param_groups:
-                    #g['lr'] = lr
-            train_loss = []
-            train_mape = []
-            train_rmse = []
-            t1 = time.time()
-            dataloader['train_loader'].shuffle()
-            engine.set_state('train')
+                for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):
+                    trainx = torch.Tensor(x).to(device) # torch.Size([64, 15, 80, 2])
+                    trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 80, 15])
+                    trainy = torch.Tensor(y).to(device)
+                    trainy = trainy.transpose(1, 3)
+                    
+                    metrics = engine.train_syn(trainx, trainy, F_t, G['train'], adj_idx)
+                    train_loss.append(metrics[0])
+                    train_mape.append(metrics[1])
+                    train_rmse.append(metrics[2])
+                    if iter % args.print_every == 0 :
+                        log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                        print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
 
-            for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):
-                trainx = torch.Tensor(x).to(device) # torch.Size([64, 15, 80, 2])
-                trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 80, 15])
-                trainy = torch.Tensor(y).to(device)
-                trainy = trainy.transpose(1, 3)
-                
-                metrics = engine.train_syn(trainx, trainy, F_t, G['train'], adj_idx)
-                train_loss.append(metrics[0])
-                train_mape.append(metrics[1])
-                train_rmse.append(metrics[2])
-                if iter % args.print_every == 0 :
-                    log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                    print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
+                t2 = time.time()
+                train_time.append(t2-t1)
 
-            t2 = time.time()
-            train_time.append(t2-t1)
+                #validation
+                valid_loss = []
+                valid_mape = []
+                valid_rmse = []
 
-            #validation
-            valid_loss = []
-            valid_mape = []
-            valid_rmse = []
+                s1 = time.time()
+                engine.set_state('val')
+                for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
+                    testx = torch.Tensor(x).to(device)
+                    testx = testx.transpose(1, 3)
+                    testy = torch.Tensor(y).to(device)
+                    testy = testy.transpose(1, 3)
+                    # [64, 2, 80, 15]
+                    metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
+                    valid_loss.append(metrics[0])
+                    valid_mape.append(metrics[1])
+                    valid_rmse.append(metrics[2])
+                s2 = time.time()
+                log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
+                print(log.format(i,(s2-s1)))
+                val_time.append(s2-s1)
+                mtrain_loss = np.mean(train_loss)
+                mtrain_mape = np.mean(train_mape)
+                mtrain_rmse = np.mean(train_rmse)
 
-            s1 = time.time()
-            engine.set_state('val')
-            for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
-                testx = torch.Tensor(x).to(device)
-                testx = testx.transpose(1, 3)
-                testy = torch.Tensor(y).to(device)
-                testy = testy.transpose(1, 3)
-                # [64, 2, 80, 15]
-                metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
-                valid_loss.append(metrics[0])
-                valid_mape.append(metrics[1])
-                valid_rmse.append(metrics[2])
-            s2 = time.time()
-            log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
-            print(log.format(i,(s2-s1)))
-            val_time.append(s2-s1)
-            mtrain_loss = np.mean(train_loss)
-            mtrain_mape = np.mean(train_mape)
-            mtrain_rmse = np.mean(train_rmse)
+                mvalid_loss = np.mean(valid_loss)
+                mvalid_mape = np.mean(valid_mape)
+                mvalid_rmse = np.mean(valid_rmse)
+                his_loss.append(mvalid_loss)
 
-            mvalid_loss = np.mean(valid_loss)
-            mvalid_mape = np.mean(valid_mape)
-            mvalid_rmse = np.mean(valid_rmse)
-            his_loss.append(mvalid_loss)
-
-            log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
-            print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
-            torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
-        print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
-        print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
+                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
+                print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+                torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+            print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
+            print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
 
 
     else:
@@ -199,86 +205,90 @@ def main():
                              args.learning_rate, args.weight_decay, device, supports, args.gcn_bool, 
                              args.addaptadj, adjinit, args.blocks, args.layers)
 
+        if model_name is None:
+            print("start training...",flush=True)
+            his_loss =[]
+            val_time = []
+            train_time = []
+            for i in range(1,args.epochs+1):
+                #if i % 10 == 0:
+                    #lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
+                    #for g in engine.optimizer.param_groups:
+                        #g['lr'] = lr
+                train_loss = []
+                train_mape = []
+                train_rmse = []
+                t1 = time.time()
+                dataloader['train_loader'].shuffle()
+                for iter, (x, y) in enumerate(dataloader['train_loader'].get_iterator()):
+                    trainx = torch.Tensor(x).to(device) # torch.Size([64, 12, 207, 2])
+                    trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 207, 12])
+                    trainy = torch.Tensor(y).to(device)
+                    trainy = trainy.transpose(1, 3)
+                    if args.data == 'syn':
+                        metrics = engine.train_syn(trainx, trainy, F_t, G)
+                    else:
+                        metrics = engine.train(trainx, trainy[:,0,:,:])
+                    train_loss.append(metrics[0])
+                    train_mape.append(metrics[1])
+                    train_rmse.append(metrics[2])
+                    if iter % args.print_every == 0 :
+                        log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                        print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
+            
+                t2 = time.time()
+                train_time.append(t2-t1)
+                #validation
+                valid_loss = []
+                valid_mape = []
+                valid_rmse = []
 
-        print("start training...",flush=True)
-        his_loss =[]
-        val_time = []
-        train_time = []
-        for i in range(1,args.epochs+1):
-            #if i % 10 == 0:
-                #lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
-                #for g in engine.optimizer.param_groups:
-                    #g['lr'] = lr
-            train_loss = []
-            train_mape = []
-            train_rmse = []
-            t1 = time.time()
-            dataloader['train_loader'].shuffle()
-            for iter, (x, y) in enumerate(dataloader['train_loader'].get_iterator()):
-                trainx = torch.Tensor(x).to(device) # torch.Size([64, 12, 207, 2])
-                trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 207, 12])
-                trainy = torch.Tensor(y).to(device)
-                trainy = trainy.transpose(1, 3)
-                if args.data == 'syn':
-                    metrics = engine.train_syn(trainx, trainy, F_t, G)
-                else:
-                    metrics = engine.train(trainx, trainy[:,0,:,:])
-                train_loss.append(metrics[0])
-                train_mape.append(metrics[1])
-                train_rmse.append(metrics[2])
-                if iter % args.print_every == 0 :
-                    log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                    print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
-        
-            t2 = time.time()
-            train_time.append(t2-t1)
-            #validation
-            valid_loss = []
-            valid_mape = []
-            valid_rmse = []
+                s1 = time.time()
+                for iter, (x, y) in enumerate(dataloader['val_loader'].get_iterator()):
+                    testx = torch.Tensor(x).to(device)
+                    testx = testx.transpose(1, 3)
+                    testy = torch.Tensor(y).to(device)
+                    testy = testy.transpose(1, 3)
+                    if args.data == 'syn':
+                        metrics = engine.eval_syn(testx, testy, F_t, G)
+                    else:
+                        metrics = engine.eval(testx, testy[:,0,:,:])
+                    valid_loss.append(metrics[0])
+                    valid_mape.append(metrics[1])
+                    valid_rmse.append(metrics[2])
 
-            s1 = time.time()
-            for iter, (x, y) in enumerate(dataloader['val_loader'].get_iterator()):
-                testx = torch.Tensor(x).to(device)
-                testx = testx.transpose(1, 3)
-                testy = torch.Tensor(y).to(device)
-                testy = testy.transpose(1, 3)
-                if args.data == 'syn':
-                    metrics = engine.eval_syn(testx, testy, F_t, G)
-                else:
-                    metrics = engine.eval(testx, testy[:,0,:,:])
-                valid_loss.append(metrics[0])
-                valid_mape.append(metrics[1])
-                valid_rmse.append(metrics[2])
+                s2 = time.time()
+                log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
+                print(log.format(i,(s2-s1)))
+                val_time.append(s2-s1)
+                mtrain_loss = np.mean(train_loss)
+                mtrain_mape = np.mean(train_mape)
+                mtrain_rmse = np.mean(train_rmse)
 
-            s2 = time.time()
-            log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
-            print(log.format(i,(s2-s1)))
-            val_time.append(s2-s1)
-            mtrain_loss = np.mean(train_loss)
-            mtrain_mape = np.mean(train_mape)
-            mtrain_rmse = np.mean(train_rmse)
+                mvalid_loss = np.mean(valid_loss)
+                mvalid_mape = np.mean(valid_mape)
+                mvalid_rmse = np.mean(valid_rmse)
+                his_loss.append(mvalid_loss)
 
-            mvalid_loss = np.mean(valid_loss)
-            mvalid_mape = np.mean(valid_mape)
-            mvalid_rmse = np.mean(valid_rmse)
-            his_loss.append(mvalid_loss)
-
-            log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
-            print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
-            torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
-        print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
-        print("Average Inference Time: {:.4f} secs".format(np.mean(val_time)))
+                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
+                print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+                torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+            print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
+            print("Average Inference Time: {:.4f} secs".format(np.mean(val_time)))
 
 
     ################################ TESTING ################################
-    bestid = np.argmin(his_loss)
+    if model_name is None:
+        bestid = np.argmin(his_loss)
+        print(bestid)
 
-    print("Training finished")
-    print("The valid loss on best model is", str(round(his_loss[bestid],4)))
+        print("Training finished")
+        print("The valid loss on best model is", str(round(his_loss[bestid],4)))
 
-    engine.model.load_state_dict(torch.load(args.save+"_epoch_"+str(bestid+1)+"_"+str(round(his_loss[bestid],2))+".pth"))
-
+        engine.model.load_state_dict(torch.load(args.save+"_epoch_"+str(bestid+1)+"_"+str(
+                                                        round(his_loss[bestid],2))+".pth"))
+    else:
+        engine.model.load_state_dict(torch.load(model_name))
     amae = []
     amape = []
     armse = []
@@ -298,6 +308,9 @@ def main():
 
         else:
             engine.set_state('test')
+            reals = []
+            pred_Fs = []
+            pred_Es = []
             for iter, (x, y, adj_idx) in enumerate(dataloader['test_loader'].get_iterator()):
                 testx = torch.Tensor(x).to(device)
                 testx = testx.transpose(1, 3)
@@ -308,10 +321,38 @@ def main():
                 amae.append(metrics[0])
                 amape.append(metrics[1])
                 armse.append(metrics[2])
+
+                reals.append(testy)
+                pred_Fs.append(metrics[3])
+                pred_Es.append(metrics[4])
+
+            
+            reals = torch.stack(reals).cpu().numpy()
+            reals = reals.reshape(-1, *reals.shape[2:])
+            pred_Fs = torch.stack(pred_Fs).cpu().numpy()
+            pred_Fs = pred_Fs.reshape(-1, *pred_Fs.shape[2:]).squeeze()
+            pred_Es = torch.stack(pred_Es).cpu().numpy()
+            pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()
+            # reals shape: (1984, 2, 80, 15); pred_F/Es shape:(1984, 80, 15)
+
+            # reverse slideing window --> results: (num_nodes, total_timesteps)
+            ret = util.reverse_sliding_window([reals[:, 0, :, :].squeeze(), 
+                                         reals[:, 1, :, :].squeeze(),
+                                         pred_Fs, pred_Es])
+
+            viz_node_idx = 0
+            plt.figure()
+            plt.plot(ret[0][viz_node_idx, :], label='real F')
+            plt.plot(ret[1][viz_node_idx, :], label='real E')
+            plt.plot(ret[2][viz_node_idx, :], label='pred F')
+            plt.plot(ret[3][viz_node_idx, :], label='pred E')
+            plt.legend()
+            plt.show()
         
-        log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
-        print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
-        torch.save(engine.model.state_dict(), args.save+"_exp"+str(args.expid)+"_best_"+str(round(his_loss[bestid],2))+".pth")
+        if model_name is None:
+            log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+            print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
+            torch.save(engine.model.state_dict(), args.save+"_exp"+str(args.expid)+"_best_"+str(round(his_loss[bestid],2))+".pth")
     
     else:
         outputs = []
@@ -345,6 +386,6 @@ def main():
 
 if __name__ == "__main__":
     t1 = time.time()
-    main()
+    main('garage/syn_exp1_best_0.05.pth')
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

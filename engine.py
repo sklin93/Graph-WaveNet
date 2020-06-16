@@ -1,6 +1,9 @@
 import torch.optim as optim
 from model import *
 import Utils.util as util
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
 import ipdb
 
 class trainer():
@@ -175,4 +178,4 @@ class trainer():
         loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
-        return loss.item(),mape,rmse
+        return loss.item(),mape,rmse, F, predict

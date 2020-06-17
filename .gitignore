@@ -3,3 +3,4 @@ garage
 *__pycache__*
 *log*
 *nohup*
+*.pkl

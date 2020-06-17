@@ -7,6 +7,8 @@ from engine import trainer
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
+import pickle
+import os
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
@@ -28,7 +30,7 @@ parser.add_argument('--num_nodes',type=int,default=80,help='number of nodes')
 parser.add_argument('--layers',type=int,default=2,help='number of layers per gwnet block')
 parser.add_argument('--blocks',type=int,default=4,help='number of blocks in gwnet model')
 
-parser.add_argument('--batch_size',type=int,default=64,help='batch size')
+parser.add_argument('--batch_size',type=int,default=8,help='batch size')
 parser.add_argument('--learning_rate',type=float,default=0.001,help='learning rate')
 parser.add_argument('--dropout',type=float,default=0.3,help='dropout rate')
 parser.add_argument('--weight_decay',type=float,default=0.0001,help='weight decay rate')
@@ -44,10 +46,9 @@ np.random.seed(0)
 torch.manual_seed(999)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(999)
+    torch.cuda.empty_cache()
 
-
-
-def main(model_name=None): # for directly loading trained model
+def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained model/ generated syn data
     #set seed
     #torch.manual_seed(args.seed)
     #np.random.seed(args.seed)
@@ -56,15 +57,30 @@ def main(model_name=None): # for directly loading trained model
     device = torch.device(args.device)
 
     if args.data == 'syn':
-        nTrain = 40 # Number of training samples
-        nValid = int(0.25 * nTrain) # Number of validation samples
-        nTest = int(0.05 * nTrain) # Number of testing samples
-        num_timestep = 1000
-        dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.num_nodes,
-                                                           nTrain, nValid, nTest, num_timestep,
-                                                           args.seq_length, args.batch_size, 
-                                                           args.batch_size, args.batch_size, 
-                                                           same_G=same_G)
+        if  os.path.isfile(syn_file):
+            with open(syn_file, 'rb') as handle:
+                pkl_data = pickle.load(handle)
+            nTrain, nValid, nTest, num_timestep = pkl_data['nTrain'], pkl_data['nValid'],\
+                                                  pkl_data['nTest'], pkl_data['num_timestep']
+            dataloader, adj_mx, F_t, G = pkl_data['dataloader'], pkl_data['adj_mx'],\
+                                         pkl_data['F_t'], pkl_data['G']
+            print('synthetic data loaded')
+        else:
+            nTrain = 40 # Number of training samples
+            nValid = int(0.25 * nTrain) # Number of validation samples
+            nTest = int(0.05 * nTrain) # Number of testing samples
+            num_timestep = 1000
+            dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.num_nodes,
+                                                               nTrain, nValid, nTest, num_timestep,
+                                                               args.seq_length, args.batch_size, 
+                                                               args.batch_size, args.batch_size, 
+                                                               same_G=same_G)
+            pkl_data = {'nTrain': nTrain, 'nValid': nValid, 'nTest': nTest,
+                        'num_timestep': num_timestep, 'dataloader': dataloader,
+                        'adj_mx': adj_mx, 'F_t': F_t, 'G':G}
+            with open(syn_file, 'wb') as handle:
+                pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
     else:
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
         dataloader = util.load_dataset_metr(args.data, args.batch_size, args.batch_size, 
@@ -348,7 +364,7 @@ def main(model_name=None): # for directly loading trained model
             plt.plot(ret[3][viz_node_idx, :], label='pred E')
             plt.legend()
             plt.show()
-        
+
         if model_name is None:
             log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
             print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
@@ -386,6 +402,7 @@ def main(model_name=None): # for directly loading trained model
 
 if __name__ == "__main__":
     t1 = time.time()
-    main('garage/syn_exp1_best_0.05.pth')
+    # main('garage/syn_exp1_best_0.05.pth')
+    main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

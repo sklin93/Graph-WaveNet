@@ -30,7 +30,7 @@ parser.add_argument('--num_nodes',type=int,default=80,help='number of nodes')
 parser.add_argument('--layers',type=int,default=2,help='number of layers per gwnet block')
 parser.add_argument('--blocks',type=int,default=4,help='number of blocks in gwnet model')
 
-parser.add_argument('--batch_size',type=int,default=8,help='batch size')
+parser.add_argument('--batch_size',type=int,default=32,help='batch size')
 parser.add_argument('--learning_rate',type=float,default=0.001,help='learning rate')
 parser.add_argument('--dropout',type=float,default=0.3,help='dropout rate')
 parser.add_argument('--weight_decay',type=float,default=0.0001,help='weight decay rate')
@@ -69,7 +69,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             nTrain = 40 # Number of training samples
             nValid = int(0.25 * nTrain) # Number of validation samples
             nTest = int(0.05 * nTrain) # Number of testing samples
-            num_timestep = 1000
+            num_timestep = 500 # 1000
             dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.num_nodes,
                                                                nTrain, nValid, nTest, num_timestep,
                                                                args.seq_length, args.batch_size, 

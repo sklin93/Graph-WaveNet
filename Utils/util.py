@@ -226,7 +226,7 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
     # graph config
     graphType = 'SBM' # Type of graph
     graphOptions = {}
-    graphOptions['nCommunities'] = 5 #64 # Number of communities (EEG node number)
+    graphOptions['nCommunities'] = 64 #64 # Number of communities (EEG node number)
     graphOptions['probIntra'] = 0.8 # Intracommunity probability
     graphOptions['probInter'] = 0.2 # Intercommunity probability
     # sample config

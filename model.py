@@ -374,6 +374,9 @@ class gwnet_diff_G(nn.Module):
             gate = torch.sigmoid(gate)
             x = filter * gate
 
+            # del filter
+            # del gate
+
             # parametrized skip connection
 
             s = x

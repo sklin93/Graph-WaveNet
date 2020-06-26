@@ -13,6 +13,7 @@ import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 5
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--device',type=str,default='cuda:0',help='')
@@ -69,7 +70,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             nTrain = 40 # Number of training samples
             nValid = int(0.25 * nTrain) # Number of validation samples
             nTest = int(0.05 * nTrain) # Number of testing samples
-            num_timestep = 500 # 1000
+            num_timestep = 1000 # 1000
             dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.num_nodes,
                                                                nTrain, nValid, nTest, num_timestep,
                                                                args.seq_length, args.batch_size, 
@@ -80,6 +81,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                         'adj_mx': adj_mx, 'F_t': F_t, 'G':G}
             with open(syn_file, 'wb') as handle:
                 pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    elif args.data == 'CRASH':
+        util.load_dataset_CRASH(args.adjtype, args.batch_size, args.batch_size, args.batch_size)
 
     else:
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
@@ -147,7 +151,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
-                dataloader['train_loader'].shuffle()
+                # dataloader['train_loader'].shuffle()
                 engine.set_state('train')
 
                 for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):
@@ -235,7 +239,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
-                dataloader['train_loader'].shuffle()
+                # dataloader['train_loader'].shuffle()
                 for iter, (x, y) in enumerate(dataloader['train_loader'].get_iterator()):
                     trainx = torch.Tensor(x).to(device) # torch.Size([64, 12, 207, 2])
                     trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 207, 12])

@@ -87,18 +87,16 @@ def checkIsAP(arr):
             return False
     return True
 
-def closest_idx(pt, li):
+def closest_idx(pt, li, k=1):
     '''find the index of the closest point in the li to the pt
     pt: 3d coordinate
-    li: list of 3d coordinates'''
-    idx = 0
-    min_dist = float("inf")
+    li: list of 3d coordinates
+    return the index list of k-nearest neighbors
+    '''
+    dist = []
     for i in range(len(li)):
-        dist = np.linalg.norm(pt - li[i])
-        if dist < min_dist:
-            min_dist = dist
-            idx = i
-    return idx
+        dist.append(np.linalg.norm(pt - li[i]))
+    return np.argsort(dist)[:k]
 ########################
 
 def get_eeg(comn_ids):
@@ -312,7 +310,7 @@ def get_comn_ids():
     print(len(comn_ids), 'subjects:', comn_ids)
     return comn_ids
 
-def get_region_assignment():
+def get_region_assignment(num_region):
     # Group assignment mapping: need to assign brain regions to closest electrodes
     coor_mri = np.loadtxt(os.path.join(sc_d, 'Parcellations/MNI', 'Schaefer2018_'+
                           str(num_region)+ 'Parcels_17Networks_order_FSLMNI152_2mm.txt'),
@@ -326,10 +324,11 @@ def get_region_assignment():
         region_assignment[k] = []
 
     # for each mri region, assign it to the closest eeg electrode
-    for i in range(num_region + 1):
+    for i in range(num_region):
         cur_centroid = coor_mri[coor_mri[:, -1] == (i+1)][:,:3].mean(0)
-        closest_eeg = closest_idx(cur_centroid, coor_eeg)
-        region_assignment[closest_eeg].append(i)
+        closest_eeg = closest_idx(cur_centroid, coor_eeg, k=3) #TODO: try different k
+        for eeg_idx in closest_eeg:
+            region_assignment[eeg_idx].append(i)
     return region_assignment
 
 if __name__ == '__main__':

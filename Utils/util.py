@@ -6,6 +6,7 @@ import torch
 from scipy.sparse import linalg
 from Utils import graphTools
 from Utils import dataTools
+from Utils.CRASH_loader import *
 
 import ipdb
 from tqdm import tqdm
@@ -226,7 +227,7 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
     # graph config
     graphType = 'SBM' # Type of graph
     graphOptions = {}
-    graphOptions['nCommunities'] = 64 #64 # Number of communities (EEG node number)
+    graphOptions['nCommunities'] = 5 #64 # Number of communities (EEG node number)
     graphOptions['probIntra'] = 0.8 # Intracommunity probability
     graphOptions['probInter'] = 0.2 # Intercommunity probability
     # sample config
@@ -322,11 +323,160 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         
         return data, adjs, F_t, G
 
+def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_size=None, 
+                       pooltype='avg', pad_seq=False): 
+    '''
+    If pad_seq is True, the shorter EEG and fMRI sequences will be padded with their 
+    values on the last timestep;
+    If it is set to False, the shorter (irregular) sequences will be discarded from 
+    dataloading process
+    '''
+
+    comn_ids = get_comn_ids()
+    num_region = 200 # 200 or 400
+
+    eeg = get_eeg(comn_ids)
+    sc = get_sc(comn_ids, num_region)
+    fmri = get_fmri(comn_ids, num_region)
+    fmri_time_res = fmri['time_res']
+    eeg_time_res = eeg['time_res']
+
+    ''' 
+    # choose a common length for EEG based on length of fMRI, and their time resolutions
+    clip & pad EEG sequences with different length (to the most common length)
+    '''
+    # subj = fmri[(list(fmri)[-1])]
+    # fmri_len = len(subj[list(subj)[0]])
+    # eeg_len = 1 + int((fmri_len - 1) * fmri_time_res / eeg_time_res)
+    fmri_len = 326
+    eeg_len = 189282 # hard coded to the most common length
+
+    # check and keep only common sessions for each subject
+    eeg_mat = []
+    sc_mat = []
+    fmri_mat = []
+
+    # sub_ses = {}
+    for subj in comn_ids:
+        # comn_sess = []
+        for k in eeg[subj]:
+            if k in sc[subj] and k in fmri[subj]:
+                cur_fmri = fmri[subj][k][:fmri_len]
+                cur_eeg = eeg[subj][k].transpose(1,0)[:eeg_len]
+                # OPTION 1: pad shorter sequences
+                if pad_seq:
+                    # comn_sess.append(k)
+                    sc_mat.append(sc[subj][k])
+
+                    if len(cur_fmri) < fmri_len:
+                        cur_fmri = np.concatenate((cur_fmri, cur_fmri[-1:].repeat(
+                                                    fmri_len - len(cur_fmri),axis=0)))
+                    if len(cur_eeg) < eeg_len:
+                        cur_eeg = np.concatenate((cur_eeg, cur_eeg[-1:].repeat(
+                                                    eeg_len - len(cur_eeg),axis=0)))
+                    fmri_mat.append(cur_fmri)
+                    eeg_mat.append(cur_eeg)
+
+                # OPTION 2: discard shorter sequences (only keep the legit ones..)
+                else:
+                    if len(cur_fmri) == fmri_len and len(cur_eeg) == eeg_len:
+                        # comn_sess.append(k)
+                        sc_mat.append(sc[subj][k])
+                        fmri_mat.append(cur_fmri)
+                        eeg_mat.append(cur_eeg)
+        # sub_ses[subj] = comn_sess
+
+    sc_mat = np.stack(sc_mat)
+    fmri_mat = np.stack(fmri_mat)
+    eeg_mat = np.stack(eeg_mat)
+
+    region_assignment = get_region_assignment(num_region) #{EEG_electrodes: brain region}
+    
+    inv_mapping = {} #{brain region: EEG_electrodes}
+    for k, v in region_assignment.items():
+        for _v in v:
+            if _v not in inv_mapping:
+                inv_mapping[_v] = []
+            inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
+
+    '''
+    Several issues: 
+    - F_t = fmri_res / eeg_res is not an integer [x]
+    - choose K (which needs to be very large --> since F_t~580) [x]
+    - region assignment have empty nodes, need to think of how to deal with them [x]
+    - cannot feed the whole sequence length into the memory, has to break into chuncks
+    '''
+    fmri = []
+    eeg = []
+
+    F_t = fmri_time_res / eeg_time_res
+    K = int(F_t * 5)
+    
+    ''' # MEMORY ISSUE #
+    # repeat fmri F_t times for each timestep
+    print('fmri temporal extension')
+    rpt_ts = 0
+    for i in tqdm(range(fmri_len)):
+        rpt_t = round((i+1)*F_t) - round(i*F_t)
+        rpt_ts += rpt_t
+        fmri.append(fmri_mat[:, i:i+1, :].repeat(rpt_t, axis=1))
+    fmri_mat = np.concatenate(fmri, axis=1)
+    del fmri
+    
+    # expand eeg signals from num_electrods to num_region
+    print('eeg spatial extension')
+    eeg = []
+    for i in tqdm(range(num_region)):
+        eeg.append(eeg_mat[:, :, inv_mapping[i]].mean(-1))
+    ipdb.set_trace()
+    eeg_mat = np.stack(eeg, -1)
+    del eeg
+    '''
+    # TODO: sliding window
+    idxer = np.arange(K)[None, :] + np.arange(eeg_len - K + 1)[:, None]
+
+    # TODO: put region_assignment mapping under G
+    G = {}
+    data = {}
+    data['x_train'], data['y_train'], G['train'] = xs[:nTrain], ys[:nTrain], Gs[:nTrain]
+    data['x_val'], data['y_val'], G['val'] = xs[nTrain:-nTest], ys[nTrain:-nTest], Gs[nTrain:-nTest]
+    data['x_test'], data['y_test'], G['test'] = xs[-nTest:], ys[-nTest:], Gs[-nTest:]
+
+    data['train_adj_idx'] = np.arange(nTrain).reshape(-1,1).repeat(
+                                            data['x_train'].shape[1],axis=1)
+    data['val_adj_idx'] = np.arange(nValid).reshape(-1,1).repeat(
+                                            data['x_val'].shape[1],axis=1)
+    data['test_adj_idx'] = np.arange(nTest).reshape(-1,1).repeat(
+                                            data['x_test'].shape[1],axis=1)
+    
+    for k, v in data.items():
+        # batching 1 : train model on one subject then finetune
+        data[k] = v.reshape(-1, *v.shape[2:])
+        # # batching 2 : each batch contains different subject
+        # v = np.transpose(v, (1,0,2,3,4)).reshape(-1, *v.shape[2:])
+
+    scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), 
+                            std=data['x_train'][..., 0].std())
+    # Data format
+    for category in ['train', 'val', 'test']:
+        data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
+    
+    data['train_loader'] = DataLoader_syn(data['x_train'], data['y_train'], 
+                                          data['train_adj_idx'], batch_size)
+    data['val_loader'] = DataLoader_syn(data['x_val'], data['y_val'], 
+                                        data['val_adj_idx'], valid_batch_size)
+    data['test_loader'] = DataLoader_syn(data['x_test'], data['y_test'],
+                                         data['test_adj_idx'], test_batch_size)
+    data['scaler'] = scaler
+    
+    return data, adjs, F_t, G
+
 def reverse_sliding_window(li):
     '''
     takes in a list, each with dimension [num_window, num_nodes, window_width]
     stepsize (each window's starting index discrepancy) is 1 for this function
     return a list, each with dimension [num_nodes, num_timesteps]
+    ***** The overlapped portion are averaged *****
     '''
     def _rev(a):
         assert len(a.shape) == 3

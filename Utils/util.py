@@ -231,7 +231,7 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
     graphOptions['probIntra'] = 0.8 # Intracommunity probability
     graphOptions['probInter'] = 0.2 # Intercommunity probability
     # sample config
-    F_t = K // 3 # need K%F_t==0 for a cleaner fMRI cut
+    F_t = K // 12 # need K%F_t==0 for a cleaner fMRI cut
     # noise parameters
     sigmaSpatial = 0.1
     sigmaTemporal = 0.1
@@ -332,7 +332,8 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     dataloading process
     '''
 
-    comn_ids = get_comn_ids()
+    comn_ids = get_comn_ids()[:10] # due to memory limit
+    print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 
     eeg = get_eeg(comn_ids)
@@ -348,8 +349,11 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     # subj = fmri[(list(fmri)[-1])]
     # fmri_len = len(subj[list(subj)[0]])
     # eeg_len = 1 + int((fmri_len - 1) * fmri_time_res / eeg_time_res)
-    fmri_len = 326
-    eeg_len = 189282 # hard coded to the most common length
+    # fmri_len = 326   # hard coded to the most common length
+    # eeg_len = 189282 # hard coded to the most common length
+
+    fmri_len = 51  # due to memory limit
+    eeg_len = 1 + int((fmri_len - 1) * fmri_time_res / eeg_time_res) # due to memory limit
 
     # check and keep only common sessions for each subject
     eeg_mat = []
@@ -406,34 +410,42 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     - region assignment have empty nodes, need to think of how to deal with them [x]
     - cannot feed the whole sequence length into the memory, has to break into chuncks
     '''
-    fmri = []
-    eeg = []
+    del fmri
+    del eeg
 
-    F_t = fmri_time_res / eeg_time_res
+    F_t = fmri_time_res / eeg_time_res #582.4
     K = int(F_t * 5)
     
-    ''' # MEMORY ISSUE #
+    # MEMORY ISSUE #
     # repeat fmri F_t times for each timestep
     print('fmri temporal extension')
+    signals = [] #fmri
     rpt_ts = 0
-    for i in tqdm(range(fmri_len)):
+    for i in tqdm(range(fmri_len-1)):
         rpt_t = round((i+1)*F_t) - round(i*F_t)
         rpt_ts += rpt_t
-        fmri.append(fmri_mat[:, i:i+1, :].repeat(rpt_t, axis=1))
-    fmri_mat = np.concatenate(fmri, axis=1)
-    del fmri
+        signals.append(fmri_mat[:, i:i+1, :].repeat(rpt_t, axis=1))
+    signals.append(fmri_mat[:, -1:, :])
+    signals = np.concatenate(signals, axis=1)
+    del fmri_mat
     
     # expand eeg signals from num_electrods to num_region
     print('eeg spatial extension')
-    eeg = []
+    eeg = np.zeros_like(signals)
     for i in tqdm(range(num_region)):
-        eeg.append(eeg_mat[:, :, inv_mapping[i]].mean(-1))
-    ipdb.set_trace()
-    eeg_mat = np.stack(eeg, -1)
+        eeg[:, :, i] = eeg_mat[:, :, inv_mapping[i]].mean(-1)
+    del eeg_mat
+    
+    signals = np.stack((signals, eeg), axis=-1)
     del eeg
-    '''
+
+    # TODO: normalize
+
     # TODO: sliding window
     idxer = np.arange(K)[None, :] + np.arange(eeg_len - K + 1)[:, None]
+    ipdb.set_trace()
+    ###### MEMORY ISSUE ######
+    signals[:, idxer, :, :]
 
     # TODO: put region_assignment mapping under G
     G = {}

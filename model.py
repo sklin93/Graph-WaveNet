@@ -270,7 +270,7 @@ class gwnet_diff_G(nn.Module):
         receptive_field = 1
         for b in range(blocks):
             additional_scope = kernel_size - 1
-            new_dilation = 1
+            new_dilation = 4 #1
             for i in range(layers):
                 # dilated convolutions
                 self.filter_convs.append(nn.Conv2d(in_channels=residual_channels,

@@ -24,7 +24,7 @@ parser.add_argument('--gcn_bool',action='store_true',help='whether to add graph 
 parser.add_argument('--aptonly',action='store_true',help='whether only adaptive adj')
 parser.add_argument('--addaptadj',action='store_true',help='whether add adaptive adj')
 parser.add_argument('--randomadj',action='store_true',help='whether random initialize adaptive adj')
-parser.add_argument('--seq_length',type=int,default=15,help='')
+parser.add_argument('--seq_length',type=int,default=48,help='')
 parser.add_argument('--nhid',type=int,default=32,help='')
 parser.add_argument('--in_dim',type=int,default=2,help='inputs dimension')
 parser.add_argument('--num_nodes',type=int,default=80,help='number of nodes')
@@ -67,7 +67,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                                          pkl_data['F_t'], pkl_data['G']
             print('synthetic data loaded')
         else:
-            nTrain = 40 # Number of training samples
+            nTrain = 80 # Number of training samples
             nValid = int(0.25 * nTrain) # Number of validation samples
             nTest = int(0.05 * nTrain) # Number of testing samples
             num_timestep = 1000 # 1000
@@ -76,11 +76,11 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                                                                args.seq_length, args.batch_size, 
                                                                args.batch_size, args.batch_size, 
                                                                same_G=same_G)
-            pkl_data = {'nTrain': nTrain, 'nValid': nValid, 'nTest': nTest,
-                        'num_timestep': num_timestep, 'dataloader': dataloader,
-                        'adj_mx': adj_mx, 'F_t': F_t, 'G':G}
-            with open(syn_file, 'wb') as handle:
-                pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            # pkl_data = {'nTrain': nTrain, 'nValid': nValid, 'nTest': nTest,
+            #             'num_timestep': num_timestep, 'dataloader': dataloader,
+            #             'adj_mx': adj_mx, 'F_t': F_t, 'G':G}
+            # with open(syn_file, 'wb') as handle:
+            #     pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     elif args.data == 'CRASH':
         util.load_dataset_CRASH(args.adjtype, args.batch_size, args.batch_size, args.batch_size)
@@ -151,7 +151,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
-                # dataloader['train_loader'].shuffle()
+                dataloader['train_loader'].shuffle()
                 engine.set_state('train')
 
                 for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):
@@ -159,7 +159,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 80, 15])
                     trainy = torch.Tensor(y).to(device)
                     trainy = trainy.transpose(1, 3)
-                    
+
                     metrics = engine.train_syn(trainx, trainy, F_t, G['train'], adj_idx)
                     train_loss.append(metrics[0])
                     train_mape.append(metrics[1])
@@ -239,7 +239,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
-                # dataloader['train_loader'].shuffle()
+                dataloader['train_loader'].shuffle()
                 for iter, (x, y) in enumerate(dataloader['train_loader'].get_iterator()):
                     trainx = torch.Tensor(x).to(device) # torch.Size([64, 12, 207, 2])
                     trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 207, 12])
@@ -406,7 +406,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    # main('garage/syn_exp1_best_0.05.pth')
-    main()
+    main('garage/syn_epoch_36_0.07.pth')
+    # main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

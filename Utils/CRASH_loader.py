@@ -307,7 +307,7 @@ def get_comn_ids():
 
     comn_ids = sorted([v for v in eeg_ids if v in fmri_ids])
     comn_ids = sorted([v for v in sc_ids if v in comn_ids])
-    print(len(comn_ids), 'subjects:', comn_ids)
+    # print(len(comn_ids), 'subjects:', comn_ids)
     return comn_ids
 
 def get_region_assignment(num_region):

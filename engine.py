@@ -31,7 +31,7 @@ class trainer():
                                blocks=blocks, layers=layers)
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
-        self.loss = util.masked_mae
+        self.loss = util.masked_mae #util.masked_mse
         self.scaler = scaler
         self.clip = 5
         self.supports = supports

@@ -54,7 +54,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
     #torch.manual_seed(args.seed)
     #np.random.seed(args.seed)
     #load data
-    same_G = False
+    same_G = True#False
     device = torch.device(args.device)
 
     if args.data == 'syn':
@@ -67,7 +67,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                                          pkl_data['F_t'], pkl_data['G']
             print('synthetic data loaded')
         else:
-            nTrain = 80 # Number of training samples
+            nTrain = 50 # Number of training samples
             nValid = int(0.25 * nTrain) # Number of validation samples
             nTest = int(0.05 * nTrain) # Number of testing samples
             num_timestep = 1000 # 1000
@@ -406,7 +406,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    main('garage/syn_epoch_36_0.07.pth')
-    # main()
+    # main('garage/syn_epoch_36_0.07.pth')
+    main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

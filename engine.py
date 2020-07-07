@@ -1,9 +1,7 @@
 import torch.optim as optim
 from model import *
 import Utils.util as util
-import matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
+from torch.utils.checkpoint import checkpoint
 import ipdb
 
 class trainer():
@@ -37,6 +35,7 @@ class trainer():
         self.supports = supports
         self.aptinit = aptinit
         self.state = None
+        self.device = device
 
     def train(self, input, real_val):
         self.model.train()
@@ -60,12 +59,14 @@ class trainer():
     def set_state(self, state):
         assert state == 'train' or state == 'val' or state == 'test'
         self.state = state
+        self.supports[state] = [torch.tensor(i).to(self.device) for i in self.supports[state]]
 
     def train_syn(self, input, real, F_t, G, adj_idx=None, pooltype='avg'):
         '''output p=1 sequence, then deteministically subsample/average to F and E'''
 
         self.model.train()
         self.optimizer.zero_grad()
+        input = input[:,:1,:,:] #only use F as input
         input = nn.functional.pad(input,(1,0,0,0))
 
         if adj_idx is not None: # different graph structure for each sample
@@ -86,9 +87,9 @@ class trainer():
         
         if pooltype == 'avg':
             # F from predict & expand
-            F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
-            F = F.unsqueeze(-1).repeat(*[1]*len(F.shape), F_t)
-            F = F.view(*F.shape[:-2], -1)
+            # F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
+            # F = F.unsqueeze(-1).repeat(*[1]*len(F.shape), F_t)
+            # F = F.view(*F.shape[:-2], -1)
             # E from predict & expand
             if not type(G) == list:
                 # if all the graphs share a same cluster structure
@@ -107,13 +108,61 @@ class trainer():
         elif pooltype == 'subsample':
             pass #TODO
 
-        loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        loss = self.loss(predict, real[:,1:,:,:], 0.0)
         loss.backward()
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
+        return loss.item(),mape,rmse
+
+    def train_CRASH(self, input, real_F, real_E, F_t, assign_dict, adj_idx, pooltype='avg'):
+        '''output p=1 sequence, then deteministically subsample/average to F and E'''
+
+        # self.model = torch.nn.DataParallel(self.model, device_ids=[0, 1])
+        self.model.train()
+        self.optimizer.zero_grad()
+        input = nn.functional.pad(input,(1,0,0,0))
+
+        assert self.state is not None, 'set train/val/test state first'
+
+        supports = self.supports[self.state]
+        supports = [supports[i][adj_idx] for i in range(len(supports))]
+        aptinit = self.aptinit[self.state]
+        if aptinit is not None:
+            aptinit = aptinit[adj_idx]
+
+        predict = self.model(input, supports, aptinit)
+        predict = predict.transpose(1,3)
+        
+        if pooltype == 'avg':
+            # TODO: F from predict & expand (F_t not int, cannot directly using reshape&mean)
+            # ipdb.set_trace()
+            # F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
+            # # F shape
+            # F = F.unsqueeze(-1).repeat(*[1]*len(F.shape), F_t)
+            # F = F.view(*F.shape[:-2], -1)
+            # F = self.scaler[0].inverse_transform(F)
+
+            # E from predict & expand
+            E = []
+            for k in range(len(assign_dict)):
+                E.append(predict[:,:,assign_dict[k],:].mean(2, keepdim=True))
+            E = torch.cat(E, dim=2)
+            E = self.scaler[1].inverse_transform(E)
+            
+        # loss = (self.loss(F.cpu(), real_F) + self.loss(predict.cpu(), real_E)).to(self.device)
+        real_E = real_E.to(self.device)
+        loss = self.loss(E, real_E)
+        # loss = self.loss(E.cpu(), real_E).to(self.device)
+        loss.backward()
+        if self.clip is not None:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
+        self.optimizer.step()
+        mape = util.masked_mape(E,real_E).item()
+        rmse = util.masked_rmse(E,real_E).item()
         return loss.item(),mape,rmse
 
     def eval(self, input, real_val):
@@ -132,6 +181,7 @@ class trainer():
     def eval_syn(self, input, real, F_t, G, adj_idx=None, pooltype='avg'):
         same_G = (type(G) != list)
         self.model.eval()
+        input = input[:,:1,:,:]
         input = nn.functional.pad(input,(1,0,0,0))
 
         if same_G:
@@ -175,7 +225,8 @@ class trainer():
         elif pooltype == 'subsample':
             pass #TODO
 
-        loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        loss = self.loss(predict, real[:,1:,:,:], 0.0)
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
         return loss.item(),mape,rmse, F, predict

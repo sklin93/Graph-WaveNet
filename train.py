@@ -4,16 +4,16 @@ import argparse
 import time
 import Utils.util as util
 from engine import trainer
-import matplotlib
-matplotlib.use('TkAgg')
+# import matplotlib
+# matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import pickle
 import os
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 5
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 3 --in_dim=1
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 batch_size 2 --blocks 2 --layers 2
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--device',type=str,default='cuda:0',help='')
@@ -54,7 +54,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
     #torch.manual_seed(args.seed)
     #np.random.seed(args.seed)
     #load data
-    same_G = True#False
+    same_G = False
     device = torch.device(args.device)
 
     if args.data == 'syn':
@@ -67,7 +67,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                                          pkl_data['F_t'], pkl_data['G']
             print('synthetic data loaded')
         else:
-            nTrain = 50 # Number of training samples
+            nTrain = 20 #50 # Number of training samples
             nValid = int(0.25 * nTrain) # Number of validation samples
             nTest = int(0.05 * nTrain) # Number of testing samples
             num_timestep = 1000 # 1000
@@ -83,15 +83,185 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             #     pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     elif args.data == 'CRASH':
-        util.load_dataset_CRASH(args.adjtype, args.batch_size, args.batch_size, args.batch_size)
+        adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
+        # region_assignment: {EEG_electrodes: brain region}
+        inv_mapping = {} #{brain region: EEG_electrodes}
+        for k, v in region_assignment.items():
+            for _v in v:
+                if _v not in inv_mapping:
+                    inv_mapping[_v] = []
+                inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
+        
+        basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
+        assert int(args.seq_length % basic_len) == 0
 
     else:
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
         dataloader = util.load_dataset_metr(args.data, args.batch_size, args.batch_size, 
                                             args.batch_size)
         
+    if args.data == 'CRASH':
+        nTrain = round(0.7 * len(adj_mx))
+        nValid = round(0.15 * len(adj_mx))
+        nTest = len(adj_mx) - nTrain - nValid
 
-    if args.data == 'syn' and not same_G: # different graph structure for each sample
+        # separate adj matrices into train-val-test samples
+        adj_train = [[],[]]
+        for a in adj_mx[:nTrain]:
+            adj_train[0].append(a[0])
+            adj_train[1].append(a[1])
+        adj_train = [np.stack(np.asarray(i)) for i in adj_train]
+
+        adj_val = [[],[]]
+        for a in adj_mx[nTrain:-nTest]:
+            adj_val[0].append(a[0])
+            adj_val[1].append(a[1])
+        adj_val = [np.stack(np.asarray(i)) for i in adj_val]
+
+        adj_test = [[],[]]
+        for a in adj_mx[-nTest:]:
+            adj_test[0].append(a[0])
+            adj_test[1].append(a[1])
+        adj_test = [np.stack(np.asarray(i)) for i in adj_test]
+        
+        scaler_F = util.StandardScaler(mean=fmri_mat[:nTrain].mean(), 
+                                        std=fmri_mat[:nTrain].std())
+        scaler_E = util.StandardScaler(mean=eeg_mat[:nTrain].mean(), 
+                                        std=eeg_mat[:nTrain].std())
+
+        print(args)
+        supports = {}
+        supports['train'] = adj_train
+        supports['val'] = adj_val
+        supports['test'] = adj_test
+
+        adjinit = {}
+        if args.randomadj:
+            adjinit['train'] = adjinit['val'] = adjinit['test'] = None
+        else:
+            adjinit['train'] = supports['train'][0]
+            adjinit['val'] = supports['val'][0]
+            adjinit['test'] = supports['test'][0]
+
+        if args.aptonly:
+            supports['train'] = supports['val'] = supports['test'] = None
+
+        offset = args.seq_length // basic_len
+        E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
+                            eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
+
+        K = int(args.seq_length / F_t)
+        F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
+                                                int(basic_len/F_t))[:, None]
+        # x = F_idxer[:-offset]
+        # y = F_idxer[offset:]
+
+        assert len(F_idxer) == len(E_idxer)
+        sample_per_suj = len(F_idxer) - offset
+        batch_per_sub = sample_per_suj // args.batch_size
+        # ipdb.set_trace() # sample_per_suj, batch_per_sub
+
+        engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
+                         args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
+                         supports, args.gcn_bool, args.addaptadj, adjinit, args.blocks, args.layers)
+
+        if model_name is None:
+            print("start training...",flush=True)
+
+            his_loss =[]
+            val_time = []
+            train_time = []
+            for i in range(1,args.epochs+1):
+                #if i % 10 == 0:
+                    #lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
+                    #for g in engine.optimizer.param_groups:
+                        #g['lr'] = lr
+                train_loss = []
+                train_mape = []
+                train_rmse = []
+                t1 = time.time()
+                engine.set_state('train')
+
+                for subj_id in range(nTrain):
+                    subj_F = scaler_F.transform(fmri_mat[subj_id, F_idxer, :])
+                    # E is only for outputs
+                    subj_E =  scaler_E.transform(eeg_mat[subj_id, E_idxer, :][offset:]) 
+                    # TODO: shuffle within
+                    for batch_i in range(batch_per_sub):
+                        in_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        # x = []
+                        # for i in range(K):
+                        #     rpt_t = round((i+1)*F_t) - round(i*F_t)
+                        #     x.append(in_F[:, i:i+1, :].repeat(rpt_t, axis=1))
+                        # x = np.concatenate(x, axis=1)
+                        # x = torch.Tensor(x[...,None]).to(device).transpose(1, 3)
+                        in_F = torch.Tensor(in_F[...,None]).to(device).transpose(1, 3)
+                        # ipdb.set_trace()
+                        y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
+                        y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+                        # ipdb.set_trace()
+                        engine.train_CRASH(in_F, y_F, y_E, F_t, region_assignment, [subj_id]*args.batch_size)
+
+                for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):
+                    trainx = torch.Tensor(x).to(device) # torch.Size([64, 15, 80, 2])
+                    trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 80, 15])
+                    trainy = torch.Tensor(y).to(device)
+                    trainy = trainy.transpose(1, 3)
+
+                    metrics = engine.train_syn(trainx, trainy, F_t, G['train'], adj_idx)
+                    train_loss.append(metrics[0])
+                    train_mape.append(metrics[1])
+                    train_rmse.append(metrics[2])
+                    if iter % args.print_every == 0 :
+                        log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                        print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
+
+                t2 = time.time()
+                train_time.append(t2-t1)
+
+                #validation
+                valid_loss = []
+                valid_mape = []
+                valid_rmse = []
+
+                s1 = time.time()
+                engine.set_state('val')
+                for subj_id in range(nValid):
+                    # for F&E: nTrain + subj_id; for adj_idx: subj_id
+                    pass
+
+                for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
+                    testx = torch.Tensor(x).to(device)
+                    testx = testx.transpose(1, 3)
+                    testy = torch.Tensor(y).to(device)
+                    testy = testy.transpose(1, 3)
+                    # [64, 2, 80, 15]
+                    metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
+                    valid_loss.append(metrics[0])
+                    valid_mape.append(metrics[1])
+                    valid_rmse.append(metrics[2])
+                s2 = time.time()
+                log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
+                print(log.format(i,(s2-s1)))
+                val_time.append(s2-s1)
+                mtrain_loss = np.mean(train_loss)
+                mtrain_mape = np.mean(train_mape)
+                mtrain_rmse = np.mean(train_rmse)
+
+                mvalid_loss = np.mean(valid_loss)
+                mvalid_mape = np.mean(valid_mape)
+                mvalid_rmse = np.mean(valid_rmse)
+                his_loss.append(mvalid_loss)
+
+                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
+                print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+                torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+            print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
+            print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
+
+    elif args.data == 'syn' and not same_G: # different graph structure for each sample
         assert len(adj_mx) == nTrain + nValid + nTest
 
         # separate adj matrices into train-val-test samples
@@ -116,9 +286,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         scaler = dataloader['scaler']
         print(args)
         supports = {}
-        supports['train'] = [torch.tensor(i).to(device) for i in adj_train]
-        supports['val'] = [torch.tensor(i).to(device) for i in adj_val]
-        supports['test'] = [torch.tensor(i).to(device) for i in adj_test]
+        supports['train'] = adj_train
+        supports['val'] = adj_val
+        supports['test'] = adj_test
 
         adjinit = {}
         if args.randomadj:
@@ -206,7 +376,6 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
-
 
     else:
         scaler = dataloader['scaler']

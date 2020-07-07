@@ -323,8 +323,7 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         
         return data, adjs, F_t, G
 
-def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_size=None, 
-                       pooltype='avg', pad_seq=False): 
+def load_dataset_CRASH(adjtype, pad_seq=False): 
     '''
     If pad_seq is True, the shorter EEG and fMRI sequences will be padded with their 
     values on the last timestep;
@@ -332,7 +331,7 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     dataloading process
     '''
 
-    comn_ids = get_comn_ids()[:10] # due to memory limit
+    comn_ids = get_comn_ids()
     print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 
@@ -341,6 +340,7 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     fmri = get_fmri(comn_ids, num_region)
     fmri_time_res = fmri['time_res']
     eeg_time_res = eeg['time_res']
+    F_t = fmri_time_res / eeg_time_res #582.4
 
     ''' 
     # choose a common length for EEG based on length of fMRI, and their time resolutions
@@ -349,15 +349,15 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     # subj = fmri[(list(fmri)[-1])]
     # fmri_len = len(subj[list(subj)[0]])
     # eeg_len = 1 + int((fmri_len - 1) * fmri_time_res / eeg_time_res)
-    # fmri_len = 326   # hard coded to the most common length
-    # eeg_len = 189282 # hard coded to the most common length
+    fmri_len = 326   # hard coded to the most common length
+    eeg_len = 189282# hard coded to the most common length
 
-    fmri_len = 51  # due to memory limit
-    eeg_len = 1 + int((fmri_len - 1) * fmri_time_res / eeg_time_res) # due to memory limit
+    # fmri_len = 51  # due to memory limit
+    # eeg_len = 1 + int((fmri_len - 1) * F_t) # due to memory limit
 
     # check and keep only common sessions for each subject
     eeg_mat = []
-    sc_mat = []
+    adjs = []
     fmri_mat = []
 
     # sub_ses = {}
@@ -370,7 +370,7 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
                 # OPTION 1: pad shorter sequences
                 if pad_seq:
                     # comn_sess.append(k)
-                    sc_mat.append(sc[subj][k])
+                    adjs.append(mod_adj(sc[subj][k], adjtype))
 
                     if len(cur_fmri) < fmri_len:
                         cur_fmri = np.concatenate((cur_fmri, cur_fmri[-1:].repeat(
@@ -385,23 +385,20 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
                 else:
                     if len(cur_fmri) == fmri_len and len(cur_eeg) == eeg_len:
                         # comn_sess.append(k)
-                        sc_mat.append(sc[subj][k])
+                        adjs.append(mod_adj(sc[subj][k], adjtype))
                         fmri_mat.append(cur_fmri)
                         eeg_mat.append(cur_eeg)
         # sub_ses[subj] = comn_sess
-
-    sc_mat = np.stack(sc_mat)
+    del fmri
+    del eeg
     fmri_mat = np.stack(fmri_mat)
     eeg_mat = np.stack(eeg_mat)
 
     region_assignment = get_region_assignment(num_region) #{EEG_electrodes: brain region}
-    
-    inv_mapping = {} #{brain region: EEG_electrodes}
-    for k, v in region_assignment.items():
-        for _v in v:
-            if _v not in inv_mapping:
-                inv_mapping[_v] = []
-            inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
+
+    # TODO: normalize/Standardize
+
+    return adjs, fmri_mat, eeg_mat, region_assignment, F_t
 
     '''
     Several issues: 
@@ -410,10 +407,7 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     - region assignment have empty nodes, need to think of how to deal with them [x]
     - cannot feed the whole sequence length into the memory, has to break into chuncks
     '''
-    del fmri
-    del eeg
-
-    F_t = fmri_time_res / eeg_time_res #582.4
+    '''
     K = int(F_t * 5)
     
     # MEMORY ISSUE #
@@ -438,8 +432,6 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     
     signals = np.stack((signals, eeg), axis=-1)
     del eeg
-
-    # TODO: normalize
 
     # TODO: sliding window
     idxer = np.arange(K)[None, :] + np.arange(eeg_len - K + 1)[:, None]
@@ -482,6 +474,7 @@ def load_dataset_CRASH(adjtype, batch_size, valid_batch_size= None, test_batch_s
     data['scaler'] = scaler
     
     return data, adjs, F_t, G
+    '''
 
 def reverse_sliding_window(li):
     '''

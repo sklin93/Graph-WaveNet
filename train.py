@@ -4,8 +4,8 @@ import argparse
 import time
 import Utils.util as util
 from engine import trainer
-# import matplotlib
-# matplotlib.use('TkAgg')
+import matplotlib
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import pickle
 import os
@@ -13,8 +13,8 @@ import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 3 --in_dim=1
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 batch_size 2 --blocks 2 --layers 2
-
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --save ./garage/CRASH
+# (Notice the CRASH can handle batch size 32 on server)
 parser = argparse.ArgumentParser()
 parser.add_argument('--device',type=str,default='cuda:0',help='')
 parser.add_argument('--data',type=str,default='data/METR-LA',help='data path')
@@ -57,7 +57,20 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
     same_G = False
     device = torch.device(args.device)
 
-    if args.data == 'syn':
+    if args.data == 'CRASH':
+        adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
+        # region_assignment: {EEG_electrodes: brain region}
+        inv_mapping = {} #{brain region: EEG_electrodes}
+        for k, v in region_assignment.items():
+            for _v in v:
+                if _v not in inv_mapping:
+                    inv_mapping[_v] = []
+                inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
+        
+        basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
+        assert int(args.seq_length % basic_len) == 0
+    
+    elif args.data == 'syn':
         if  os.path.isfile(syn_file):
             with open(syn_file, 'rb') as handle:
                 pkl_data = pickle.load(handle)
@@ -67,7 +80,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                                          pkl_data['F_t'], pkl_data['G']
             print('synthetic data loaded')
         else:
-            nTrain = 20 #50 # Number of training samples
+            nTrain = 50 # Number of training samples
             nValid = int(0.25 * nTrain) # Number of validation samples
             nTest = int(0.05 * nTrain) # Number of testing samples
             num_timestep = 1000 # 1000
@@ -81,19 +94,6 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             #             'adj_mx': adj_mx, 'F_t': F_t, 'G':G}
             # with open(syn_file, 'wb') as handle:
             #     pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-    elif args.data == 'CRASH':
-        adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-        # region_assignment: {EEG_electrodes: brain region}
-        inv_mapping = {} #{brain region: EEG_electrodes}
-        for k, v in region_assignment.items():
-            for _v in v:
-                if _v not in inv_mapping:
-                    inv_mapping[_v] = []
-                inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
-        
-        basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
-        assert int(args.seq_length % basic_len) == 0
 
     else:
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
@@ -159,6 +159,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         assert len(F_idxer) == len(E_idxer)
         sample_per_suj = len(F_idxer) - offset
         batch_per_sub = sample_per_suj // args.batch_size
+        print('Batch per subject:', batch_per_sub)
         # ipdb.set_trace() # sample_per_suj, batch_per_sub
 
         engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
@@ -172,51 +173,51 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             val_time = []
             train_time = []
             for i in range(1,args.epochs+1):
-                #if i % 10 == 0:
-                    #lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
-                    #for g in engine.optimizer.param_groups:
-                        #g['lr'] = lr
+                if i % 5 == 0:
+                    # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
+                    for g in engine.optimizer.param_groups:
+                        g['lr'] *= 0.9
                 train_loss = []
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
                 engine.set_state('train')
 
-                for subj_id in range(nTrain):
+                iter = 0
+                # TODO: cross-subject shuffle
+                # shuffle subject
+                train_idx = np.arange(nTrain)
+                np.random.shuffle(train_idx)
+                for subj_id in train_idx:
                     subj_F = scaler_F.transform(fmri_mat[subj_id, F_idxer, :])
                     # E is only for outputs
                     subj_E =  scaler_E.transform(eeg_mat[subj_id, E_idxer, :][offset:]) 
-                    # TODO: shuffle within
-                    for batch_i in range(batch_per_sub):
-                        in_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    # shuffle batch
+                    batch_idx = np.arange(batch_per_sub)
+                    np.random.shuffle(batch_idx)
+                    for batch_i in batch_idx:
+                        x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         # x = []
                         # for i in range(K):
                         #     rpt_t = round((i+1)*F_t) - round(i*F_t)
-                        #     x.append(in_F[:, i:i+1, :].repeat(rpt_t, axis=1))
+                        #     x.append(x_F[:, i:i+1, :].repeat(rpt_t, axis=1))
                         # x = np.concatenate(x, axis=1)
                         # x = torch.Tensor(x[...,None]).to(device).transpose(1, 3)
-                        in_F = torch.Tensor(in_F[...,None]).to(device).transpose(1, 3)
-                        # ipdb.set_trace()
+                        x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
                         y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
                         y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
-                        # ipdb.set_trace()
-                        engine.train_CRASH(in_F, y_F, y_E, F_t, region_assignment, [subj_id]*args.batch_size)
-
-                for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):
-                    trainx = torch.Tensor(x).to(device) # torch.Size([64, 15, 80, 2])
-                    trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 80, 15])
-                    trainy = torch.Tensor(y).to(device)
-                    trainy = trainy.transpose(1, 3)
-
-                    metrics = engine.train_syn(trainx, trainy, F_t, G['train'], adj_idx)
-                    train_loss.append(metrics[0])
-                    train_mape.append(metrics[1])
-                    train_rmse.append(metrics[2])
-                    if iter % args.print_every == 0 :
-                        log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                        print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
+                        
+                        metrics = engine.train_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                                                    [subj_id]*args.batch_size)
+                        train_loss.append(metrics[0])
+                        train_mape.append(metrics[1])
+                        train_rmse.append(metrics[2])
+                        if iter % args.print_every == 0 :
+                            log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                            print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
+                        iter += 1
 
                 t2 = time.time()
                 train_time.append(t2-t1)
@@ -229,23 +230,31 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 s1 = time.time()
                 engine.set_state('val')
                 for subj_id in range(nValid):
-                    # for F&E: nTrain + subj_id; for adj_idx: subj_id
-                    pass
+                    # for F&E: nTrain + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
+                    subj_F = scaler_F.transform(fmri_mat[nTrain + subj_id, F_idxer, :])
+                    # E is only for outputs
+                    subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
+                    for batch_i in range(batch_per_sub):
+                        x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
+                        
+                        y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
+                        y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
-                for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
-                    testx = torch.Tensor(x).to(device)
-                    testx = testx.transpose(1, 3)
-                    testy = torch.Tensor(y).to(device)
-                    testy = testy.transpose(1, 3)
-                    # [64, 2, 80, 15]
-                    metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
-                    valid_loss.append(metrics[0])
-                    valid_mape.append(metrics[1])
-                    valid_rmse.append(metrics[2])
+                        metrics = engine.eval_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                                                    [subj_id]*args.batch_size)
+
+                        valid_loss.append(metrics[0])
+                        valid_mape.append(metrics[1])
+                        valid_rmse.append(metrics[2])
+
                 s2 = time.time()
                 log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
                 print(log.format(i,(s2-s1)))
                 val_time.append(s2-s1)
+
                 mtrain_loss = np.mean(train_loss)
                 mtrain_mape = np.mean(train_mape)
                 mtrain_rmse = np.mean(train_rmse)
@@ -482,7 +491,61 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
     amape = []
     armse = []
 
-    if args.data == 'syn':
+    if args.data == 'CRASH':
+        engine.set_state('test')
+        reals = []
+        pred_Es = []
+        for subj_id in range(nTest):
+            # for F&E: nTrain + nValid + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
+            subj_F = scaler_F.transform(fmri_mat[nTrain + nValid + subj_id, F_idxer, :])
+            # E is only for outputs
+            subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]) 
+            for batch_i in range(batch_per_sub):
+                x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
+                
+                y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
+                y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+
+                metrics = engine.eval_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                                            [subj_id]*args.batch_size)
+
+                amae.append(metrics[0])
+                amape.append(metrics[1])
+                armse.append(metrics[2])
+
+                reals.append(y_E)
+                pred_Es.append(metrics[-1])
+        
+        reals = torch.stack(reals).cpu().numpy()
+        reals = reals.reshape(-1, *reals.shape[2:])
+        pred_Es = torch.stack(pred_Es).cpu().numpy()
+        pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()
+        # ipdb.set_trace()
+        # reals shape: (1984, 2, 80, 15); pred_F/Es shape:(1984, 80, 15)
+
+        # reverse slideing window --> results: (num_nodes, total_timesteps)
+        # ret = util.inverse_sliding_window([reals[:, 0, :, :].squeeze(), pred_Es])
+        # concatenate
+        reals = reals.squeeze().transpose(1,0,2)
+        reals = reals.reshape((len(reals), -1))
+        pred_Es = pred_Es.transpose(1,0,2)
+        pred_Es = pred_Es.reshape((len(pred_Es),-1))
+        viz_node_idx = 0
+        plt.figure()
+        plt.plot(reals[viz_node_idx, :], label='real E')
+        plt.plot(pred_Es[viz_node_idx, :], label='pred E')
+        plt.legend()
+        plt.show()
+
+        if model_name is None:
+            log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+            print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
+            torch.save(engine.model.state_dict(), args.save+"_exp"+str(args.expid)+"_best_"+str(round(his_loss[bestid],2))+".pth")
+    
+    elif args.data == 'syn':
         if same_G:
             for iter, (x, y) in enumerate(dataloader['test_loader'].get_iterator()):
                 testx = torch.Tensor(x).to(device)
@@ -525,7 +588,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             # reals shape: (1984, 2, 80, 15); pred_F/Es shape:(1984, 80, 15)
 
             # reverse slideing window --> results: (num_nodes, total_timesteps)
-            ret = util.reverse_sliding_window([reals[:, 0, :, :].squeeze(), 
+            ret = util.inverse_sliding_window([reals[:, 0, :, :].squeeze(), 
                                          reals[:, 1, :, :].squeeze(),
                                          pred_Fs, pred_Es])
 
@@ -575,7 +638,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    # main('garage/syn_epoch_36_0.07.pth')
+    # main('garage/CRASH_epoch_97_0.61.pth')
     main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

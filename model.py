@@ -245,7 +245,7 @@ class gwnet_diff_G(nn.Module):
     def __init__(self, device, num_nodes, dropout=0.3, supports_len=0,
                 gcn_bool=True, addaptadj=True,
                 in_dim=2,out_dim=12,residual_channels=32,dilation_channels=32,
-                skip_channels=256,end_channels=512,kernel_size=2,blocks=4,layers=2):
+                skip_channels=256,end_channels=512,kernel_size=3,blocks=4,layers=2):
 
         super(gwnet_diff_G, self).__init__()
         self.dropout = dropout
@@ -342,6 +342,30 @@ class gwnet_diff_G(nn.Module):
             return skip
         return custom_forward
 
+    def tcn(self, filter_conv, gate_conv, skip_conv, skip):
+        '''combine dilated conv + skip parts, entire tcn'''
+        def custom_forward(residual):
+            # dilated convolution
+            _filter = filter_conv(residual)
+            _filter = torch.tanh(_filter)
+            gate = gate_conv(residual)
+            gate = torch.sigmoid(gate)
+            x = _filter * gate
+            # del _filter
+            # del _gate
+
+            # parametrized skip connection
+            s = x
+            s = skip_conv(s)
+            try:
+                skip = skip[:, :, :,  -s.size(3):]
+            except:
+                skip = 0
+            skip = s + skip
+
+            return x, skip
+        return custom_forward            
+
     def endconv(self, end_conv_1, end_conv_2):
         def custom_forward(x):
             x = F.relu(x)
@@ -408,36 +432,39 @@ class gwnet_diff_G(nn.Module):
             #residual = dilation_func(x, dilation, init_dilation, i)
             residual = x #[batch_size, residual_dim, 80, 16]
 
-            x = checkpoint(self.diconv(self.filter_convs[i], self.gate_convs[i]), residual)
-            skip = checkpoint(self.skip_part(self.skip_convs[i], skip), x)
+            # x = checkpoint(self.diconv(self.filter_convs[i], self.gate_convs[i]), residual)
+            # skip = checkpoint(self.skip_part(self.skip_convs[i], skip), x)
 
-            # # dilated convolution
-            # filter = self.filter_convs[i](residual)
-            # filter = torch.tanh(filter)
-            # gate = self.gate_convs[i](residual)
-            # gate = torch.sigmoid(gate)
-            # x = filter * gate
+            # x, skip = checkpoint(self.tcn(self.filter_convs[i], self.gate_convs[i],
+            #                     self.skip_convs[i], skip), residual)
 
-            # # del filter
-            # # del gate
+            # dilated convolution
+            filter = self.filter_convs[i](residual)
+            filter = torch.tanh(filter)
+            gate = self.gate_convs[i](residual)
+            gate = torch.sigmoid(gate)
+            x = filter * gate
 
-            # # parametrized skip connection
-            # s = x
-            # s = self.skip_convs[i](s)
-            # try:
-            #     skip = skip[:, :, :,  -s.size(3):]
-            # except:
-            #     skip = 0
-            # skip = s + skip
+            # del filter
+            # del gate
+
+            # parametrized skip connection
+            s = x
+            s = self.skip_convs[i](s)
+            try:
+                skip = skip[:, :, :,  -s.size(3):]
+            except:
+                skip = 0
+            skip = s + skip
 
             if self.gcn_bool and supports is not None:
                 if self.addaptadj:
                     # x: [64, 32, 80, 15]
-                    # x = self.gconv[i](x, new_supports)
-                    x = checkpoint(self.gconv[i], x, *new_supports)
+                    x = self.gconv[i](x, *new_supports)
+                    # x = checkpoint(self.gconv[i], x, *new_supports)
                 else:
-                    # x = self.gconv[i](x, supports)
-                    x = checkpoint(self.gconv[i], x, supports)
+                    # x = self.gconv[i](x, *supports)
+                    x = checkpoint(self.gconv[i], x, *supports)
             else:
                 # x = self.residual_convs[i](x)
                 x = checkpoint(self.residual_convs[i], x)
@@ -447,9 +474,9 @@ class gwnet_diff_G(nn.Module):
             # print(x.shape)
         # ipdb.set_trace()
         # print(skip.shape)
-        del residual, x
-        return checkpoint(self.endconv(self.end_conv_1, self.end_conv_2), skip)
-        # x = F.relu(skip)
-        # x = F.relu(self.end_conv_1(x))
-        # x = self.end_conv_2(x) #[64, 12, 207, 1]
-        # return x
+        # del residual, x
+        # return checkpoint(self.endconv(self.end_conv_1, self.end_conv_2), skip)
+        x = F.relu(skip)
+        x = F.relu(self.end_conv_1(x))
+        x = self.end_conv_2(x) #[64, 12, 207, 1]
+        return x

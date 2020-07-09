@@ -252,16 +252,18 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         for category in ['train', 'val', 'test']:
             data['x_' + category], data['y_' + category] = _data.getSamples(category)
 
-        scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), 
+        scaler_F = StandardScaler(mean=data['x_train'][..., 0].mean(), 
                                 std=data['x_train'][..., 0].std())
+        scaler_E = StandardScaler(mean=data['x_train'][..., 1].mean(), 
+                                std=data['x_train'][..., 1].std())
         # Data format
         for category in ['train', 'val', 'test']:
-            data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
+            data['x_' + category][..., 0] = scaler_F.transform(data['x_' + category][..., 0])
         
         data['train_loader'] = DataLoader(data['x_train'], data['y_train'], batch_size)
         data['val_loader'] = DataLoader(data['x_val'], data['y_val'], valid_batch_size)
         data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size)
-        data['scaler'] = scaler
+        data['scaler'] = [scaler_F, scaler_E]
         adj = mod_adj(G.W, adjtype)
         return data, adj, F_t, G
     else:
@@ -307,11 +309,13 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
             # # batching 2 : each batch contains different subject
             # v = np.transpose(v, (1,0,2,3,4)).reshape(-1, *v.shape[2:])
 
-        scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), 
+        scaler_F = StandardScaler(mean=data['x_train'][..., 0].mean(), 
                                 std=data['x_train'][..., 0].std())
+        scaler_E = StandardScaler(mean=data['x_train'][..., 1].mean(), 
+                                std=data['x_train'][..., 1].std())
         # Data format
         for category in ['train', 'val', 'test']:
-            data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
+            data['x_' + category][..., 0] = scaler_F.transform(data['x_' + category][..., 0])
         
         data['train_loader'] = DataLoader_syn(data['x_train'], data['y_train'], 
                                               data['train_adj_idx'], batch_size)
@@ -319,7 +323,7 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
                                             data['val_adj_idx'], valid_batch_size)
         data['test_loader'] = DataLoader_syn(data['x_test'], data['y_test'],
                                              data['test_adj_idx'], test_batch_size)
-        data['scaler'] = scaler
+        data['scaler'] = [scaler_F, scaler_E]
         
         return data, adjs, F_t, G
 
@@ -476,7 +480,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     return data, adjs, F_t, G
     '''
 
-def reverse_sliding_window(li):
+def inverse_sliding_window(li):
     '''
     takes in a list, each with dimension [num_window, num_nodes, window_width]
     stepsize (each window's starting index discrepancy) is 1 for this function

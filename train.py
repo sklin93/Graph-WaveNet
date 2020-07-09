@@ -12,7 +12,7 @@ import os
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 3 --in_dim=1
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 2 --in_dim=1
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --save ./garage/CRASH
 # (Notice the CRASH can handle batch size 32 on server)
 parser = argparse.ArgumentParser()
@@ -24,10 +24,11 @@ parser.add_argument('--gcn_bool',action='store_true',help='whether to add graph 
 parser.add_argument('--aptonly',action='store_true',help='whether only adaptive adj')
 parser.add_argument('--addaptadj',action='store_true',help='whether add adaptive adj')
 parser.add_argument('--randomadj',action='store_true',help='whether random initialize adaptive adj')
-parser.add_argument('--seq_length',type=int,default=48,help='')
+parser.add_argument('--seq_length',type=int,default=60,help='')
 parser.add_argument('--nhid',type=int,default=32,help='')
 parser.add_argument('--in_dim',type=int,default=2,help='inputs dimension')
 parser.add_argument('--num_nodes',type=int,default=80,help='number of nodes')
+parser.add_argument('--kernel_size',type=int,default=2,help='kernel_size of dilated convolution')
 parser.add_argument('--layers',type=int,default=2,help='number of layers per gwnet block')
 parser.add_argument('--blocks',type=int,default=4,help='number of blocks in gwnet model')
 
@@ -80,21 +81,20 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                                          pkl_data['F_t'], pkl_data['G']
             print('synthetic data loaded')
         else:
-            nTrain = 50 # Number of training samples
-            nValid = int(0.25 * nTrain) # Number of validation samples
-            nTest = int(0.05 * nTrain) # Number of testing samples
-            num_timestep = 1000 # 1000
+            nTrain = 100 # Number of training samples
+            nValid = int(0.2 * nTrain) # Number of validation samples
+            nTest = int(0.2 * nTrain) # Number of testing samples
+            num_timestep = 1200
             dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.num_nodes,
                                                                nTrain, nValid, nTest, num_timestep,
                                                                args.seq_length, args.batch_size, 
                                                                args.batch_size, args.batch_size, 
                                                                same_G=same_G)
-            # pkl_data = {'nTrain': nTrain, 'nValid': nValid, 'nTest': nTest,
-            #             'num_timestep': num_timestep, 'dataloader': dataloader,
-            #             'adj_mx': adj_mx, 'F_t': F_t, 'G':G}
-            # with open(syn_file, 'wb') as handle:
-            #     pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
+            pkl_data = {'nTrain': nTrain, 'nValid': nValid, 'nTest': nTest,
+                        'num_timestep': num_timestep, 'dataloader': dataloader,
+                        'adj_mx': adj_mx, 'F_t': F_t, 'G':G}
+            with open(syn_file, 'wb') as handle:
+                pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
     else:
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
         dataloader = util.load_dataset_metr(args.data, args.batch_size, args.batch_size, 
@@ -164,7 +164,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
         engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
                          args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
-                         supports, args.gcn_bool, args.addaptadj, adjinit, args.blocks, args.layers)
+                         supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
+                         args.blocks, args.layers)
 
         if model_name is None:
             print("start training...",flush=True)
@@ -292,7 +293,6 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             adj_test[1].append(a[1])
         adj_test = [np.stack(np.asarray(i)) for i in adj_test]
         
-        scaler = dataloader['scaler']
         print(args)
         supports = {}
         supports['train'] = adj_train
@@ -310,10 +310,10 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         if args.aptonly:
             supports['train'] = supports['val'] = supports['test'] = None
 
-
-        engine = trainer(scaler, args.in_dim, args.seq_length, args.num_nodes, args.nhid, args.dropout,
-                         args.learning_rate, args.weight_decay, device, supports, args.gcn_bool, 
-                         args.addaptadj, adjinit, args.blocks, args.layers)
+        engine = trainer(dataloader['scaler'], args.in_dim, args.seq_length, args.num_nodes, 
+                         args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
+                         supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
+                         args.blocks, args.layers)
 
         if model_name is None:
             print("start training...",flush=True)
@@ -401,7 +401,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
         engine = trainer(scaler, args.in_dim, args.seq_length, args.num_nodes, args.nhid, args.dropout,
                              args.learning_rate, args.weight_decay, device, supports, args.gcn_bool, 
-                             args.addaptadj, adjinit, args.blocks, args.layers)
+                             args.addaptadj, adjinit, args.kernel_size, args.blocks, args.layers)
 
         if model_name is None:
             print("start training...",flush=True)
@@ -523,7 +523,6 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         reals = reals.reshape(-1, *reals.shape[2:])
         pred_Es = torch.stack(pred_Es).cpu().numpy()
         pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()
-        # ipdb.set_trace()
         # reals shape: (1984, 2, 80, 15); pred_F/Es shape:(1984, 80, 15)
 
         # reverse slideing window --> results: (num_nodes, total_timesteps)
@@ -560,8 +559,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
         else:
             engine.set_state('test')
+            in_Fs = []
             reals = []
-            pred_Fs = []
+            # pred_Fs = []
             pred_Es = []
             for iter, (x, y, adj_idx) in enumerate(dataloader['test_loader'].get_iterator()):
                 testx = torch.Tensor(x).to(device)
@@ -569,35 +569,30 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 testy = torch.Tensor(y).to(device)
                 testy = testy.transpose(1, 3)
                 # [64, 2, 80, 15]
-                metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
+                metrics = engine.eval_syn(testx, testy, F_t, G['test'], adj_idx)
                 amae.append(metrics[0])
                 amape.append(metrics[1])
                 armse.append(metrics[2])
 
+                in_Fs.append(testx)
                 reals.append(testy)
-                pred_Fs.append(metrics[3])
-                pred_Es.append(metrics[4])
-
+                pred_Es.append(metrics[-1])
             
+            in_Fs = torch.stack(in_Fs).cpu().numpy()
+            in_Fs = in_Fs.reshape(-1, *in_Fs.shape[2:]).squeeze()[:95]
             reals = torch.stack(reals).cpu().numpy()
-            reals = reals.reshape(-1, *reals.shape[2:])
-            pred_Fs = torch.stack(pred_Fs).cpu().numpy()
-            pred_Fs = pred_Fs.reshape(-1, *pred_Fs.shape[2:]).squeeze()
+            reals = reals.reshape(-1, *reals.shape[2:]).squeeze()[:95]
             pred_Es = torch.stack(pred_Es).cpu().numpy()
-            pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()
+            pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()[:95]
             # reals shape: (1984, 2, 80, 15); pred_F/Es shape:(1984, 80, 15)
 
             # reverse slideing window --> results: (num_nodes, total_timesteps)
-            ret = util.inverse_sliding_window([reals[:, 0, :, :].squeeze(), 
-                                         reals[:, 1, :, :].squeeze(),
-                                         pred_Fs, pred_Es])
-
+            ret = util.inverse_sliding_window([in_Fs, reals, pred_Es], [1]+[F_t]*2)
             viz_node_idx = 0
             plt.figure()
-            plt.plot(ret[0][viz_node_idx, :], label='real F')
+            plt.plot(ret[0][viz_node_idx, :].repeat(F_t), label='in F')
             plt.plot(ret[1][viz_node_idx, :], label='real E')
-            plt.plot(ret[2][viz_node_idx, :], label='pred F')
-            plt.plot(ret[3][viz_node_idx, :], label='pred E')
+            plt.plot(ret[2][viz_node_idx, :], label='pred E')
             plt.legend()
             plt.show()
 
@@ -638,7 +633,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    # main('garage/CRASH_epoch_97_0.61.pth')
-    main()
+    main('garage/syn_epoch_64_0.04.pth')
+    # main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

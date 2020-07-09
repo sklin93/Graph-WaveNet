@@ -231,7 +231,7 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
     graphOptions['probIntra'] = 0.8 # Intracommunity probability
     graphOptions['probInter'] = 0.2 # Intercommunity probability
     # sample config
-    F_t = K // 12 # need K%F_t==0 for a cleaner fMRI cut
+    F_t = 12 # need K%F_t==0 for a cleaner fMRI cut
     # noise parameters
     sigmaSpatial = 0.1
     sigmaTemporal = 0.1
@@ -270,8 +270,10 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         nTotal = nTrain + nValid + nTest
         Gs = []
         adjs = []
-        xs = []
-        ys = []
+        F_xs = []
+        # E_xs = []
+        # F_ys = []
+        E_ys = []
         for i in tqdm(range(nTotal)):
             G = graphTools.Graph(graphType, nNodes, graphOptions)
             G.computeGFT()
@@ -281,21 +283,31 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
                                                       sigmaTemporal=sigmaTemporal,
                                                       rhoSpatial=rhoSpatial, 
                                                       rhoTemporal=rhoTemporal)
-            x, y = _data.getSamples('train') # (971, 15, 80, 2)
-            xs.append(x)
-            ys.append(y)
+            _data = _data.getSamples('train') # [F_x, E_x, F_y, E_y]
+            
+            F_xs.append(_data[0])
+            # E_xs.append(_data[1])
+            # F_ys.append(_data[2])
+            E_ys.append(_data[3])
             Gs.append(G)
             adjs.append(mod_adj(G.W, adjtype))
 
-        xs = np.stack(xs)
-        ys = np.stack(ys)
+        F_xs = np.stack(F_xs)
+        # E_xs = np.stack(E_xs)
+        # F_ys = np.stack(F_ys)
+        E_ys = np.stack(E_ys)
 
         G = {}
         data = {}
-        data['x_train'], data['y_train'], G['train'] = xs[:nTrain], ys[:nTrain], Gs[:nTrain]
-        data['x_val'], data['y_val'], G['val'] = xs[nTrain:-nTest], ys[nTrain:-nTest], Gs[nTrain:-nTest]
-        data['x_test'], data['y_test'], G['test'] = xs[-nTest:], ys[-nTest:], Gs[-nTest:]
-
+        # data['x_train'], data['y_train'], G['train'] = xs[:nTrain], ys[:nTrain], Gs[:nTrain]
+        # data['x_val'], data['y_val'], G['val'] = xs[nTrain:-nTest], ys[nTrain:-nTest], Gs[nTrain:-nTest]
+        # data['x_test'], data['y_test'], G['test'] = xs[-nTest:], ys[-nTest:], Gs[-nTest:]
+        
+        # F in & E out
+        data['x_train'], data['y_train'], G['train'] = F_xs[:nTrain][...,None], E_ys[:nTrain][...,None], Gs[:nTrain]
+        data['x_val'], data['y_val'], G['val'] = F_xs[nTrain:-nTest][...,None], E_ys[nTrain:-nTest][...,None], Gs[nTrain:-nTest]
+        data['x_test'], data['y_test'], G['test'] = F_xs[-nTest:][...,None], E_ys[-nTest:][...,None], Gs[-nTest:]
+        
         data['train_adj_idx'] = np.arange(nTrain).reshape(-1,1).repeat(
                                                 data['x_train'].shape[1],axis=1)
         data['val_adj_idx'] = np.arange(nValid).reshape(-1,1).repeat(
@@ -309,10 +321,16 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
             # # batching 2 : each batch contains different subject
             # v = np.transpose(v, (1,0,2,3,4)).reshape(-1, *v.shape[2:])
 
-        scaler_F = StandardScaler(mean=data['x_train'][..., 0].mean(), 
-                                std=data['x_train'][..., 0].std())
-        scaler_E = StandardScaler(mean=data['x_train'][..., 1].mean(), 
-                                std=data['x_train'][..., 1].std())
+        # scaler_F = StandardScaler(mean=data['x_train'][..., 0].mean(), 
+        #                         std=data['x_train'][..., 0].std())
+        # scaler_E = StandardScaler(mean=data['x_train'][..., 1].mean(), 
+        #                         std=data['x_train'][..., 1].std())
+
+        scaler_F = StandardScaler(mean=data['x_train'].mean(), 
+                                std=data['x_train'].std())
+        # TODO: is it ok to use y's info?
+        scaler_E = StandardScaler(mean=data['y_train'].mean(), 
+                                std=data['y_train'].std())
         # Data format
         for category in ['train', 'val', 'test']:
             data['x_' + category][..., 0] = scaler_F.transform(data['x_' + category][..., 0])
@@ -480,28 +498,32 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     return data, adjs, F_t, G
     '''
 
-def inverse_sliding_window(li):
+def inverse_sliding_window(li, K=None):
     '''
     takes in a list, each with dimension [num_window, num_nodes, window_width]
-    stepsize (each window's starting index discrepancy) is 1 for this function
+    with stride (each window's starting index discrepancy) K
     return a list, each with dimension [num_nodes, num_timesteps]
     ***** The overlapped portion are averaged *****
     '''
-    def _rev(a):
+    def _rev(a, _K):
         assert len(a.shape) == 3
         num_window, num_nodes, width = a.shape
-        num_t = num_window + width - 1
+        num_t = width + (num_window - 1) * _K
 
         a = a.transpose(0, 2, 1)
-        idxer = np.arange(width)[None, :] + np.arange(num_window)[:, None]
+        idxer = np.arange(width)[None, :] + np.arange(0, num_t-width+1, _K)[:, None]
         rev = np.zeros((num_nodes, num_t))
         for l in range(num_t):
             rev[:, l] = a[idxer == l].mean(0)
         return rev
 
     ret = []
-    for i in li:
-        ret.append(_rev(i))
+    if K is None:
+        K = [1]*len(li)
+    else:
+        assert len(li) == len(K)
+    for i in range(len(li)):
+        ret.append(_rev(li[i], K[i]))
     return ret
 
 def masked_mse(preds, labels, null_val=np.nan):

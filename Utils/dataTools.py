@@ -134,31 +134,51 @@ class MultiModalityPrediction():
         # synthetic F (coarse temporal) and E (coarse spacial)
         F = self._gen_F(x, F_t, pooltype, FPoolDecay) #(nTotal, horizen//F_t, G.N)
         E = self._gen_E(x, G, pooltype, EPoolDecay) #(nTotal, horizen, G.nCommunities)
-        FE = np.stack((F,E), axis=-1) # combined signal, along feature dimension
-        # # signals and labels for F
-        # F_idxer = np.arange(K//F_t)[None, :] + np.arange((horizon-K)//F_t+1)[:, None]
+
+        # FE = np.stack((F,E), axis=-1) # combined signal, along feature dimension
+        # signals and labels for F
+        F_idxer = np.arange(K//F_t)[None, :] + np.arange((horizon-K)//F_t+1)[:, None]
         # F_signals = F[:, F_idxer[:-K//F_t], :]
         # F_labels = F[:, F_idxer[K//F_t:], :]
-        # # signals and labels for E
+        F_signals = F[:, F_idxer[:-1], :]
+        F_labels = F[:, F_idxer[1:], :]
+        # signals and labels for E
         # E_idxer = np.arange(K)[None, :] + np.arange(horizon-K+1)[:, None]
+        E_idxer = np.arange(K)[None, :] + np.arange(0, horizon-K+1, F_t)[:, None]
         # E_signals = E[:, E_idxer[:-K], :]
         # E_labels = E[:, E_idxer[K:], :]
-
-        # sliding window indexer
-        idxer = np.arange(K)[None, :] + np.arange(horizon-K+1)[:, None]
-        signals = FE[:, idxer[:-K], :, :]
-        labels = FE[:, idxer[K:], :, :]
+        E_signals = E[:, E_idxer[:-1], :]
+        E_labels = E[:, E_idxer[1:], :]
+        # # sliding window indexer for concatenated FE
+        # idxer = np.arange(K)[None, :] + np.arange(horizon-K+1)[:, None]
+        # signals = FE[:, idxer[:-K], :, :]
+        # labels = FE[:, idxer[K:], :, :]
         # Split and save them
         self.samples = {}
         self.samples['train'] = {}
-        self.samples['train']['x'] = signals[0:nTrain, :]
-        self.samples['train']['y'] = labels[0:nTrain, :]
+        self.samples['train']['x_F'] = F_signals[0:nTrain, :]
+        self.samples['train']['x_E'] = E_signals[0:nTrain, :]
+        self.samples['train']['y_F'] = F_labels[0:nTrain, :]
+        self.samples['train']['y_E'] = E_labels[0:nTrain, :]
         self.samples['val'] = {} 
-        self.samples['val']['x'] = signals[nTrain:nTrain+nValid, :]
-        self.samples['val']['y'] = labels[nTrain:nTrain+nValid, :]
+        self.samples['val']['x_F'] = F_signals[nTrain:nTrain+nValid, :]
+        self.samples['val']['x_E'] = E_signals[nTrain:nTrain+nValid, :]
+        self.samples['val']['y_F'] = F_labels[nTrain:nTrain+nValid, :]
+        self.samples['val']['y_E'] = E_labels[nTrain:nTrain+nValid, :]
         self.samples['test'] = {}
-        self.samples['test']['x'] = signals[nTrain+nValid:nTotal, :]
-        self.samples['test']['y'] = labels[nTrain+nValid:nTotal, :]
+        self.samples['test']['x_F'] = F_signals[nTrain+nValid:nTotal, :]
+        self.samples['test']['x_E'] = E_signals[nTrain+nValid:nTotal, :]
+        self.samples['test']['y_F'] = F_labels[nTrain+nValid:nTotal, :]
+        self.samples['test']['y_E'] = E_labels[nTrain+nValid:nTotal, :]
+        # self.samples['train'] = {}
+        # self.samples['train']['x'] = signals[0:nTrain, :]
+        # self.samples['train']['y'] = labels[0:nTrain, :]
+        # self.samples['val'] = {} 
+        # self.samples['val']['x'] = signals[nTrain:nTrain+nValid, :]
+        # self.samples['val']['y'] = labels[nTrain:nTrain+nValid, :]
+        # self.samples['test'] = {}
+        # self.samples['test']['x'] = signals[nTrain+nValid:nTotal, :]
+        # self.samples['test']['y'] = labels[nTrain+nValid:nTotal, :]
 
         # Change data to specified type and device
         self.astype(self.dataType)
@@ -182,7 +202,7 @@ class MultiModalityPrediction():
             F = (F * weight[None, None, None, :]).sum(-1) #(L, N, T//F_t)
 
         F = F.transpose(0, 2, 1) #(L, T//F_t, N)
-        F = F.repeat(F_t, axis=1)
+        # F = F.repeat(F_t, axis=1)
         '''
         # TODO: return F.reshape(-1, *F.shape[2:]) treats every sample as a same one
         # need differentiation when using different graphs
@@ -227,10 +247,11 @@ class MultiModalityPrediction():
                 E.append((x[:, v, :] * weight[None, :, None]).sum(1))
              
 
-        _E = np.stack(E, axis=-1) # (L, T, K)
-        E = np.zeros((_E.shape[0], _E.shape[1], G.N))
-        for k in range(len(assign_dict)):
-            E[:, :, assign_dict[k]] = _E[:, :, k:k+1].repeat(len(assign_dict[k]), axis=-1)
+        E = np.stack(E, axis=-1) # (L, T, K)
+        # _E = np.stack(E, axis=-1) # (L, T, K)
+        # E = np.zeros((_E.shape[0], _E.shape[1], G.N))
+        # for k in range(len(assign_dict)):
+        #     E[:, :, assign_dict[k]] = _E[:, :, k:k+1].repeat(len(assign_dict[k]), axis=-1)
         '''
         # TODO: return E.reshape(-1, *E.shape[2:]) treats every sample as a same one
         # need differentiation when using different graphs
@@ -247,15 +268,17 @@ class MultiModalityPrediction():
         assert samplesType == 'train' or samplesType == 'val' \
                     or samplesType == 'test'
         
-        x = self.samples[samplesType]['x']
-        y = self.samples[samplesType]['y']
-        '''
-        # TODO: return x.reshape(-1, *x.shape[2:]) treats every sample as a same one
-        # need differentiation when using different graphs
-        '''
-        x = x.reshape(-1, *x.shape[2:])
-        y = y.reshape(-1, *y.shape[2:])
-        return x, y
+        ret = []
+        for k in ['x_F', 'x_E', 'y_F', 'y_E']:
+
+            sample = self.samples[samplesType][k]
+            '''
+            # TODO: return x.reshape(-1, *x.shape[2:]) treats every sample as a same one
+            # need differentiation when using different graphs
+            '''
+            sample = sample.reshape(-1, *sample.shape[2:])
+            ret.append(sample)
+        return ret
 
     def astype(self, dataType):
         if repr(dataType).find('torch') == -1:

@@ -7,7 +7,7 @@ import ipdb
 class trainer():
     def __init__(self, scaler, in_dim, seq_length, num_nodes, nhid , 
                 dropout, lrate, wdecay, device, supports, gcn_bool,
-                addaptadj, aptinit, blocks, layers):
+                addaptadj, aptinit, kernel_size, blocks, layers):
 
         if type(supports) == dict: # different graph structure for each sample
             for k in supports: 
@@ -20,13 +20,13 @@ class trainer():
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
                                in_dim=in_dim, out_dim=seq_length, residual_channels=nhid, 
                                dilation_channels=nhid, skip_channels=nhid*8, end_channels=nhid*16,
-                               blocks=blocks, layers=layers)
+                               kernel_size=kernel_size, blocks=blocks, layers=layers)
         else:
             self.model = gwnet(device, num_nodes, dropout, supports=supports, 
                                gcn_bool=gcn_bool, addaptadj=addaptadj, aptinit=aptinit, 
                                in_dim=in_dim, out_dim=seq_length, residual_channels=nhid, 
                                dilation_channels=nhid, skip_channels=nhid*8, end_channels=nhid*16,
-                               blocks=blocks, layers=layers)
+                               kernel_size=kernel_size, blocks=blocks, layers=layers)
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
         self.loss = util.masked_mae #util.masked_mse
@@ -66,7 +66,7 @@ class trainer():
 
         self.model.train()
         self.optimizer.zero_grad()
-        input = input[:,:1,:,:] #only use F as input
+        # input = input[:,:1,:,:] #only use F as input
         input = nn.functional.pad(input,(1,0,0,0))
 
         if adj_idx is not None: # different graph structure for each sample
@@ -83,7 +83,6 @@ class trainer():
             output = self.model(input)  #[batch_size, seq_len, num_nodes, 1]
 
         predict = output.transpose(1,3)
-        
         if pooltype == 'avg':
             # F from predict & expand
             # F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
@@ -98,25 +97,28 @@ class trainer():
                                 mean(2, keepdim=True).repeat(1,1,len(assign_dict[k]),1)
                 predict = self.scaler[1].inverse_transform(predict)
             else: # different graph structure for each sample
+                _predict = torch.zeros_like(real)
                 for sample in range(len(predict)):
                     assign_dict = G[adj_idx[sample]].assign_dict
                     for k in range(len(assign_dict)):
-                        predict[sample:sample+1, :,assign_dict[k],:] = \
-                        predict[sample:sample+1,:,assign_dict[k],:].mean(2, 
-                            keepdim=True).repeat(1,1,len(assign_dict[k]),1)
-                predict = self.scaler[1].inverse_transform(predict)
+                        # predict[sample:sample+1, :,assign_dict[k],:] = \
+                        # predict[sample:sample+1,:,assign_dict[k],:].mean(2, 
+                        #     keepdim=True).repeat(1,1,len(assign_dict[k]),1)
+                        _predict[sample:sample+1, :, k, :] = predict[sample:sample+1, 
+                                                        :, assign_dict[k], :].mean(2)
+                predict = self.scaler[1].inverse_transform(_predict)
 
         elif pooltype == 'subsample':
             pass #TODO
 
         # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
-        loss = self.loss(predict, real[:,1:,:,:], 0.0)
+        loss = self.loss(predict, real, 0.0)
         loss.backward()
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
-        mape = util.masked_mape(predict,real[:,1:,:,:],0.0).item()
-        rmse = util.masked_rmse(predict,real[:,1:,:,:],0.0).item()
+        mape = util.masked_mape(predict,real,0.0).item()
+        rmse = util.masked_rmse(predict,real,0.0).item()
         return loss.item(),mape,rmse
 
     def train_CRASH(self, input, real_F, real_E, F_t, assign_dict, adj_idx, pooltype='avg'):
@@ -147,7 +149,7 @@ class trainer():
             # F = F.view(*F.shape[:-2], -1)
             # F = self.scaler[0].inverse_transform(F)
 
-            # E from predict & expand
+            # E from predict & expand, assign_dict the same (common EEG-brain region mapping)
             E = []
             for k in range(len(assign_dict)):
                 E.append(predict[:,:,assign_dict[k],:].mean(2, keepdim=True))
@@ -182,7 +184,7 @@ class trainer():
     def eval_syn(self, input, real, F_t, G, adj_idx=None, pooltype='avg'):
         same_G = (type(G) != list)
         self.model.eval()
-        input = input[:,:1,:,:]
+        # input = input[:,:1,:,:]
         input = nn.functional.pad(input,(1,0,0,0))
 
         if same_G:
@@ -216,26 +218,28 @@ class trainer():
                                 mean(2, keepdim=True).repeat(1,1,len(assign_dict[k]),1)
                 predict = self.scaler[1].inverse_transform(predict)
             else:
+                _predict = torch.zeros_like(real)
                 for sample in range(len(predict)):
                     assign_dict = G[adj_idx[sample]].assign_dict
                     for k in range(len(assign_dict)):
-                        predict[sample:sample+1, :,assign_dict[k],:] = \
-                        predict[sample:sample+1,:,assign_dict[k],:].mean(2, 
-                            keepdim=True).repeat(1,1,len(assign_dict[k]),1)
-                predict = self.scaler[1].inverse_transform(predict)
+                        # predict[sample:sample+1, :,assign_dict[k],:] = \
+                        # predict[sample:sample+1,:,assign_dict[k],:].mean(2, 
+                        #     keepdim=True).repeat(1,1,len(assign_dict[k]),1)
+                        _predict[sample:sample+1, :, k, :] = predict[sample:sample+1, 
+                                                        :, assign_dict[k], :].mean(2)
+                predict = self.scaler[1].inverse_transform(_predict)
 
         elif pooltype == 'subsample':
             pass #TODO
 
         # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
-        loss = self.loss(predict, real[:,1:,:,:], 0.0)
-        mape = util.masked_mape(predict,real[:,1:,:,:],0.0).item()
-        rmse = util.masked_rmse(predict,real[:,1:,:,:],0.0).item()
-        return loss.item(),mape,rmse, F, predict
+        loss = self.loss(predict, real, 0.0)
+        mape = util.masked_mape(predict,real,0.0).item()
+        rmse = util.masked_rmse(predict,real,0.0).item()
+        return loss.item(),mape,rmse, predict
 
     def eval_CRASH(self, input, real_F, real_E, F_t, assign_dict, adj_idx, pooltype='avg'):
         self.model.eval()
-        input = input[:,:1,:,:]
         input = nn.functional.pad(input,(1,0,0,0))
 
         supports = self.state_supports

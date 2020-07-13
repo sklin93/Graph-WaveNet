@@ -245,7 +245,8 @@ class gwnet_diff_G(nn.Module):
     def __init__(self, device, num_nodes, dropout=0.3, supports_len=0,
                 gcn_bool=True, addaptadj=True,
                 in_dim=2,out_dim=12,residual_channels=32,dilation_channels=32,
-                skip_channels=256,end_channels=512,kernel_size=3,blocks=4,layers=2):
+                skip_channels=256,end_channels=512,kernel_size=2,blocks=4,layers=2,
+                out_nodes=64):
 
         super(gwnet_diff_G, self).__init__()
         self.dropout = dropout
@@ -313,6 +314,10 @@ class gwnet_diff_G(nn.Module):
                                     out_channels=out_dim,
                                     kernel_size=(1,1),
                                     bias=True)
+        self.end_mlp = nn.Conv2d(in_channels=num_nodes,
+                                out_channels=out_nodes,
+                                kernel_size=(1,1),
+                                bias=True)
 
         self.receptive_field = receptive_field
 
@@ -375,7 +380,7 @@ class gwnet_diff_G(nn.Module):
         return custom_forward
 
     def forward(self, input, supports, aptinit):
-        # inputs: [64, 2, 80, 16], supports: len 2, each (64, 80, 80)
+        # inputs: [batch_size, 1, num_nodes, in_len+1], supports: len 2, each (batch_size, num_nodes, num_nodes)
         ### deal with supports
         batch_size = len(input)
         if self.gcn_bool and self.addaptadj:
@@ -472,11 +477,16 @@ class gwnet_diff_G(nn.Module):
             x = x + residual[:, :, :, -x.size(3):]
             x = self.bn[i](x)
             # print(x.shape)
-        # ipdb.set_trace()
+
         # print(skip.shape)
         # del residual, x
         # return checkpoint(self.endconv(self.end_conv_1, self.end_conv_2), skip)
-        x = F.relu(skip)
-        x = F.relu(self.end_conv_1(x))
-        x = self.end_conv_2(x) #[64, 12, 207, 1]
+
+        # x = F.relu(skip)
+        # x = F.relu(self.end_conv_1(x))
+        x = torch.tanh(skip)
+        x = torch.tanh(self.end_conv_1(x))
+        x = self.end_conv_2(x) #[batch_size, seq_len, num_nodes, 1]
+        x = x.transpose(1, 2)
+        x = self.end_mlp(x) #[batch_size, out_nodes, seq_len, 1]
         return x

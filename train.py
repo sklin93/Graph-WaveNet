@@ -60,6 +60,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
+        # normalize fmri & eeg to 0~1
+        # fmri_mat = (fmri_mat - fmri_mat.min()) / (fmri_mat.max() - fmri_mat.min())
+        # eeg_mat = (eeg_mat - eeg_mat.min()) / (eeg_mat.max() - eeg_mat.min())
         # region_assignment: {EEG_electrodes: brain region}
         inv_mapping = {} #{brain region: EEG_electrodes}
         for k, v in region_assignment.items():
@@ -165,7 +168,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
                          args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                          supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
-                         args.blocks, args.layers)
+                         args.blocks, args.layers, eeg_mat.shape[-1])
 
         if model_name is None:
             print("start training...",flush=True)
@@ -179,6 +182,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     for g in engine.optimizer.param_groups:
                         g['lr'] *= 0.9
                 train_loss = []
+                train_mae = []
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
@@ -213,11 +217,12 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                         metrics = engine.train_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
                                                     [subj_id]*args.batch_size)
                         train_loss.append(metrics[0])
-                        train_mape.append(metrics[1])
-                        train_rmse.append(metrics[2])
+                        train_mae.append(metrics[1])
+                        train_mape.append(metrics[2])
+                        train_rmse.append(metrics[3])
                         if iter % args.print_every == 0 :
-                            log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                            print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
+                            log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                            print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
                         iter += 1
 
                 t2 = time.time()
@@ -225,6 +230,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
                 #validation
                 valid_loss = []
+                valid_mae = []
                 valid_mape = []
                 valid_rmse = []
 
@@ -248,8 +254,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                                                     [subj_id]*args.batch_size)
 
                         valid_loss.append(metrics[0])
-                        valid_mape.append(metrics[1])
-                        valid_rmse.append(metrics[2])
+                        valid_mae.append(metrics[1])
+                        valid_mape.append(metrics[2])
+                        valid_rmse.append(metrics[3])
 
                 s2 = time.time()
                 log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
@@ -257,16 +264,18 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 val_time.append(s2-s1)
 
                 mtrain_loss = np.mean(train_loss)
+                mtrain_mae = np.mean(train_mae)
                 mtrain_mape = np.mean(train_mape)
                 mtrain_rmse = np.mean(train_rmse)
 
                 mvalid_loss = np.mean(valid_loss)
+                mvalid_mae = np.mean(valid_mae)
                 mvalid_mape = np.mean(valid_mape)
                 mvalid_rmse = np.mean(valid_rmse)
                 his_loss.append(mvalid_loss)
 
-                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
-                print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
+                print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
                 torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
@@ -313,7 +322,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         engine = trainer(dataloader['scaler'], args.in_dim, args.seq_length, args.num_nodes, 
                          args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                          supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
-                         args.blocks, args.layers)
+                         args.blocks, args.layers, 5)
+        #TODO: out_node should be the graphOptions['nCommunities'] value in Utils/util.py for syn
 
         if model_name is None:
             print("start training...",flush=True)
@@ -327,6 +337,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     #for g in engine.optimizer.param_groups:
                         #g['lr'] = lr
                 train_loss = []
+                train_mae = []
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
@@ -341,17 +352,19 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
                     metrics = engine.train_syn(trainx, trainy, F_t, G['train'], adj_idx)
                     train_loss.append(metrics[0])
-                    train_mape.append(metrics[1])
-                    train_rmse.append(metrics[2])
+                    train_mae.append(metrics[1])
+                    train_mape.append(metrics[2])
+                    train_rmse.append(metrics[3])
                     if iter % args.print_every == 0 :
-                        log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                        print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
+                        log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                        print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
 
                 t2 = time.time()
                 train_time.append(t2-t1)
 
                 #validation
                 valid_loss = []
+                valid_mae = []
                 valid_mape = []
                 valid_rmse = []
 
@@ -365,23 +378,26 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     # [64, 2, 80, 15]
                     metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
                     valid_loss.append(metrics[0])
-                    valid_mape.append(metrics[1])
-                    valid_rmse.append(metrics[2])
+                    valid_mae.append(metrics[1])
+                    valid_mape.append(metrics[2])
+                    valid_rmse.append(metrics[3])
                 s2 = time.time()
                 log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
                 print(log.format(i,(s2-s1)))
                 val_time.append(s2-s1)
                 mtrain_loss = np.mean(train_loss)
+                mtrain_mae = np.mean(train_mae)
                 mtrain_mape = np.mean(train_mape)
                 mtrain_rmse = np.mean(train_rmse)
 
                 mvalid_loss = np.mean(valid_loss)
+                mvalid_mae = np.mean(valid_mae)
                 mvalid_mape = np.mean(valid_mape)
                 mvalid_rmse = np.mean(valid_rmse)
                 his_loss.append(mvalid_loss)
 
-                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
-                print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
+                print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
                 torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
@@ -414,6 +430,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     #for g in engine.optimizer.param_groups:
                         #g['lr'] = lr
                 train_loss = []
+                train_mae = []
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
@@ -428,16 +445,18 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     else:
                         metrics = engine.train(trainx, trainy[:,0,:,:])
                     train_loss.append(metrics[0])
-                    train_mape.append(metrics[1])
-                    train_rmse.append(metrics[2])
+                    train_mae.append(metrics[1])
+                    train_mape.append(metrics[2])
+                    train_rmse.append(metrics[3])
                     if iter % args.print_every == 0 :
-                        log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                        print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]),flush=True)
+                        log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                        print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
             
                 t2 = time.time()
                 train_time.append(t2-t1)
                 #validation
                 valid_loss = []
+                valid_mae = []
                 valid_mape = []
                 valid_rmse = []
 
@@ -452,24 +471,27 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     else:
                         metrics = engine.eval(testx, testy[:,0,:,:])
                     valid_loss.append(metrics[0])
-                    valid_mape.append(metrics[1])
-                    valid_rmse.append(metrics[2])
+                    valid_mae.append(metrics[1])
+                    valid_mape.append(metrics[2])
+                    valid_rmse.append(metrics[3])
 
                 s2 = time.time()
                 log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
                 print(log.format(i,(s2-s1)))
                 val_time.append(s2-s1)
                 mtrain_loss = np.mean(train_loss)
+                mtrain_mae = np.mean(train_mae)
                 mtrain_mape = np.mean(train_mape)
                 mtrain_rmse = np.mean(train_rmse)
 
                 mvalid_loss = np.mean(valid_loss)
+                mvalid_mae = np.mean(valid_mae)
                 mvalid_mape = np.mean(valid_mape)
                 mvalid_rmse = np.mean(valid_rmse)
                 his_loss.append(mvalid_loss)
 
-                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
-                print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
+                print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
                 torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time)))
@@ -512,9 +534,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 metrics = engine.eval_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
                                             [subj_id]*args.batch_size)
 
-                amae.append(metrics[0])
-                amape.append(metrics[1])
-                armse.append(metrics[2])
+                amae.append(metrics[2])
+                amape.append(metrics[3])
+                armse.append(metrics[4])
 
                 reals.append(y_E)
                 pred_Es.append(metrics[-1])
@@ -553,9 +575,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 testy = testy.transpose(1, 3)
                 # [64, 2, 80, 15]
                 metrics = engine.eval_syn(testx, testy, F_t, G)
-                amae.append(metrics[0])
-                amape.append(metrics[1])
-                armse.append(metrics[2])
+                amae.append(metrics[2])
+                amape.append(metrics[3])
+                armse.append(metrics[4])
 
         else:
             engine.set_state('test')
@@ -570,9 +592,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 testy = testy.transpose(1, 3)
                 # [64, 2, 80, 15]
                 metrics = engine.eval_syn(testx, testy, F_t, G['test'], adj_idx)
-                amae.append(metrics[0])
-                amape.append(metrics[1])
-                armse.append(metrics[2])
+                amae.append(metrics[2])
+                amape.append(metrics[3])
+                armse.append(metrics[4])
 
                 in_Fs.append(testx)
                 reals.append(testy)
@@ -622,9 +644,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             metrics = util.metric(pred,real)
             log = 'Evaluate best model on test data for horizon {:d}, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
             print(log.format(i+1, metrics[0], metrics[1], metrics[2]))
-            amae.append(metrics[0])
-            amape.append(metrics[1])
-            armse.append(metrics[2])
+            amae.append(metrics[2])
+            amape.append(metrics[3])
+            armse.append(metrics[4])
 
         log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
         print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
@@ -633,7 +655,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    main('garage/syn_epoch_64_0.04.pth')
-    # main()
+    # main('garage/CRASH_epoch_4_1.79.pth')
+    main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

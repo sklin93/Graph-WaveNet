@@ -7,7 +7,7 @@ import ipdb
 class trainer():
     def __init__(self, scaler, in_dim, seq_length, num_nodes, nhid , 
                 dropout, lrate, wdecay, device, supports, gcn_bool,
-                addaptadj, aptinit, kernel_size, blocks, layers):
+                addaptadj, aptinit, kernel_size, blocks, layers, out_nodes):
 
         if type(supports) == dict: # different graph structure for each sample
             for k in supports: 
@@ -20,7 +20,8 @@ class trainer():
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
                                in_dim=in_dim, out_dim=seq_length, residual_channels=nhid, 
                                dilation_channels=nhid, skip_channels=nhid*8, end_channels=nhid*16,
-                               kernel_size=kernel_size, blocks=blocks, layers=layers)
+                               kernel_size=kernel_size, blocks=blocks, layers=layers, 
+                               out_nodes=out_nodes)
         else:
             self.model = gwnet(device, num_nodes, dropout, supports=supports, 
                                gcn_bool=gcn_bool, addaptadj=addaptadj, aptinit=aptinit, 
@@ -29,13 +30,14 @@ class trainer():
                                kernel_size=kernel_size, blocks=blocks, layers=layers)
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
-        self.loss = util.masked_mae #util.masked_mse
+        self.loss = util.masked_mse #util.masked_mae
         self.scaler = scaler
-        self.clip = 5
+        self.clip = 1 # TODO: tune, original 5
         self.supports = supports
         self.aptinit = aptinit
         self.state = None
         self.device = device
+        self.out_nodes = out_nodes
 
     def train(self, input, real_val):
         self.model.train()
@@ -52,16 +54,17 @@ class trainer():
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
+        mae = util.masked_mae(predict,real,0.0).item()
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
-        return loss.item(),mape,rmse
+        return loss.item(), mae, mape,rmse
 
     def set_state(self, state):
         assert state in ['train', 'val', 'test']
         self.state = state
         self.state_supports = [torch.tensor(i).to(self.device) for i in self.supports[state]]
 
-    def train_syn(self, input, real, F_t, G, adj_idx=None, pooltype='avg'):
+    def train_syn(self, input, real, F_t, G, adj_idx=None, pooltype='None'):
         '''output p=1 sequence, then deteministically subsample/average to F and E'''
 
         self.model.train()
@@ -82,8 +85,11 @@ class trainer():
         else:
             output = self.model(input)  #[batch_size, seq_len, num_nodes, 1]
 
-        predict = output.transpose(1,3)
-        if pooltype == 'avg':
+        if pooltype == 'None':
+            predict = output.permute(0,3,1,2)
+        
+        elif pooltype == 'avg':
+            predict = output.transpose(1,3)
             # F from predict & expand
             # F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
             # F = F.unsqueeze(-1).repeat(*[1]*len(F.shape), F_t)
@@ -117,11 +123,12 @@ class trainer():
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
+        mae = util.masked_mae(predict,real,0.0).item()
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
-        return loss.item(),mape,rmse
+        return loss.item(), mae, mape, rmse
 
-    def train_CRASH(self, input, real_F, real_E, F_t, assign_dict, adj_idx, pooltype='avg'):
+    def train_CRASH(self, input, real_F, real_E, F_t, assign_dict, adj_idx, pooltype='None'):
         '''output p=1 sequence, then deteministically subsample/average to F and E'''
 
         # self.model = torch.nn.DataParallel(self.model, device_ids=[0, 1])
@@ -139,8 +146,11 @@ class trainer():
 
         predict = self.model(input, supports, aptinit)
         predict = predict.transpose(1,3)
-        
-        if pooltype == 'avg':
+
+        if pooltype == 'None':
+            E = output.permute(0,3,1,2)
+
+        elif pooltype == 'avg':
             # TODO: F from predict & expand (F_t not int, cannot directly using reshape&mean)
             # ipdb.set_trace()
             # F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
@@ -164,9 +174,10 @@ class trainer():
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
+        mae = util.masked_mae(E,real_E,0.0).item()
         mape = util.masked_mape(E,real_E, 0.0).item()
         rmse = util.masked_rmse(E,real_E, 0.0).item()
-        return loss.item(),mape,rmse
+        return loss.item(), mae, mape, rmse
 
     def eval(self, input, real_val):
         self.model.eval()
@@ -177,11 +188,12 @@ class trainer():
         real = torch.unsqueeze(real_val,dim=1)
         predict = self.scaler.inverse_transform(output)
         loss = self.loss(predict, real, 0.0)
+        mae = util.masked_mae(predict,real,0.0).item()
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
-        return loss.item(),mape,rmse
+        return loss.item(), mae, mape, rmse
 
-    def eval_syn(self, input, real, F_t, G, adj_idx=None, pooltype='avg'):
+    def eval_syn(self, input, real, F_t, G, adj_idx=None, pooltype='None'):
         same_G = (type(G) != list)
         self.model.eval()
         # input = input[:,:1,:,:]
@@ -205,7 +217,10 @@ class trainer():
         
         predict = output.transpose(1,3)
 
-        if pooltype == 'avg':
+        if pooltype == 'None':
+            predict = output.permute(0,3,1,2)
+
+        elif pooltype == 'avg':
             # F from predict & expand
             # F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
             # F = F.unsqueeze(-1).repeat(*[1]*len(F.shape), F_t)
@@ -234,11 +249,12 @@ class trainer():
 
         # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
         loss = self.loss(predict, real, 0.0)
+        mae = util.masked_mae(predict,real,0.0).item()
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
-        return loss.item(),mape,rmse, predict
+        return loss.item(), mae, mape, rmse, predict
 
-    def eval_CRASH(self, input, real_F, real_E, F_t, assign_dict, adj_idx, pooltype='avg'):
+    def eval_CRASH(self, input, real_F, real_E, F_t, assign_dict, adj_idx, pooltype='None'):
         self.model.eval()
         input = nn.functional.pad(input,(1,0,0,0))
 
@@ -252,7 +268,10 @@ class trainer():
             predict = self.model(input, supports, aptinit)
 
         predict = predict.transpose(1,3)
-        
+
+        if pooltype == 'None':
+            E = output.permute(0,3,1,2)
+
         if pooltype == 'avg':
             # E from predict & expand
             E = []
@@ -264,6 +283,7 @@ class trainer():
         real_E = real_E.to(self.device)
         loss = self.loss(E, real_E, 0.0)
         # loss = self.loss(E.cpu(), real_E).to(self.device)
+        mae = util.masked_mae(E,real_E,0.0).item()
         mape = util.masked_mape(E,real_E, 0.0).item()
         rmse = util.masked_rmse(E,real_E, 0.0).item()
-        return loss.item(),mape,rmse, E
+        return loss.item(), mae, mape, rmse, E

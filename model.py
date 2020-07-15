@@ -11,6 +11,7 @@ class nconv(nn.Module):
         super(nconv,self).__init__()
 
     def forward(self,x, A):
+        # A=A.tranpose(-1,-2)
         x = torch.einsum('ncvl,vw->ncwl',(x,A))
         return x.contiguous()
 
@@ -19,6 +20,7 @@ class nconv2(nn.Module):
         super(nconv2,self).__init__()
 
     def forward(self,x, A):
+        A = torch.transpose(A, -1, -2)
         x = torch.einsum('ncvl,nvw->ncwl',(x,A))
         return x.contiguous()
 
@@ -305,19 +307,28 @@ class gwnet_diff_G(nn.Module):
                     self.gconv.append(gcn2(dilation_channels, residual_channels, dropout,
                                                               support_len=supports_len))
 
-        self.end_conv_1 = nn.Conv2d(in_channels=skip_channels,
-                                  out_channels=end_channels,
-                                  kernel_size=(1,1),
-                                  bias=True)
-
-        self.end_conv_2 = nn.Conv2d(in_channels=end_channels,
-                                    out_channels=out_dim,
-                                    kernel_size=(1,1),
-                                    bias=True)
-        self.end_mlp = nn.Conv2d(in_channels=num_nodes,
-                                out_channels=out_nodes,
-                                kernel_size=(1,1),
-                                bias=True)
+        self.end_module = nn.Sequential(
+            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=skip_channels, out_channels=end_channels,
+                      kernel_size=(1,1), bias=True),
+            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=end_channels, out_channels=end_channels*2,
+                      kernel_size=(1,1), bias=True),
+            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=end_channels*2, out_channels=end_channels*4,
+                      kernel_size=(1,1), bias=True),
+            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=end_channels*4, out_channels=end_channels*8,
+                      kernel_size=(1,1), bias=True),
+            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=end_channels*8, out_channels=out_dim,
+                      kernel_size=(1,1), bias=True)
+            )
+        self.end_mlp = nn.Sequential(
+            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
+                      kernel_size=(1,1), bias=True)
+            )
 
         self.receptive_field = receptive_field
 
@@ -480,13 +491,8 @@ class gwnet_diff_G(nn.Module):
 
         # print(skip.shape)
         # del residual, x
-        # return checkpoint(self.endconv(self.end_conv_1, self.end_conv_2), skip)
 
-        # x = F.relu(skip)
-        # x = F.relu(self.end_conv_1(x))
-        x = torch.tanh(skip)
-        x = torch.tanh(self.end_conv_1(x))
-        x = self.end_conv_2(x) #[batch_size, seq_len, num_nodes, 1]
+        x = self.end_module(skip) #[batch_size, seq_len, num_nodes, 1]
         x = x.transpose(1, 2)
         x = self.end_mlp(x) #[batch_size, out_nodes, seq_len, 1]
         return x

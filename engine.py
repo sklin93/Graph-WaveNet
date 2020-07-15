@@ -87,6 +87,7 @@ class trainer():
 
         if pooltype == 'None':
             predict = output.permute(0,3,1,2)
+            predict = self.scaler[1].inverse_transform(predict)
         
         elif pooltype == 'avg':
             predict = output.transpose(1,3)
@@ -145,12 +146,13 @@ class trainer():
             aptinit = aptinit[adj_idx]
 
         predict = self.model(input, supports, aptinit)
-        predict = predict.transpose(1,3)
-
+        
         if pooltype == 'None':
-            E = output.permute(0,3,1,2)
+            E = predict.permute(0,3,1,2)
+            # E = self.scaler[1].inverse_transform(E)
 
         elif pooltype == 'avg':
+            predict = predict.transpose(1,3)
             # TODO: F from predict & expand (F_t not int, cannot directly using reshape&mean)
             # ipdb.set_trace()
             # F = predict.reshape(*predict.shape[:-1], -1, F_t).mean(-1)
@@ -164,10 +166,11 @@ class trainer():
             for k in range(len(assign_dict)):
                 E.append(predict[:,:,assign_dict[k],:].mean(2, keepdim=True))
             E = torch.cat(E, dim=2)
-            E = self.scaler[1].inverse_transform(E)
+            # E = self.scaler[1].inverse_transform(E)
             
         # loss = (self.loss(F.cpu(), real_F, 0.0) + self.loss(predict.cpu(), real_E, 0.0)).to(self.device)
         real_E = real_E.to(self.device)
+        # ipdb.set_trace()
         loss = self.loss(E, real_E, 0.0)
         # loss = self.loss(E.cpu(), real_E, 0.0).to(self.device)
         loss.backward()
@@ -219,6 +222,7 @@ class trainer():
 
         if pooltype == 'None':
             predict = output.permute(0,3,1,2)
+            predict = self.scaler[1].inverse_transform(predict)
 
         elif pooltype == 'avg':
             # F from predict & expand
@@ -267,18 +271,18 @@ class trainer():
         with torch.no_grad():
             predict = self.model(input, supports, aptinit)
 
-        predict = predict.transpose(1,3)
-
         if pooltype == 'None':
-            E = output.permute(0,3,1,2)
+            E = predict.permute(0,3,1,2)
+            # E = self.scaler[1].inverse_transform(E)
 
         if pooltype == 'avg':
+            predict = predict.transpose(1,3)
             # E from predict & expand
             E = []
             for k in range(len(assign_dict)):
                 E.append(predict[:,:,assign_dict[k],:].mean(2, keepdim=True))
             E = torch.cat(E, dim=2)
-            E = self.scaler[1].inverse_transform(E)
+            # E = self.scaler[1].inverse_transform(E)
             
         real_E = real_E.to(self.device)
         loss = self.loss(E, real_E, 0.0)

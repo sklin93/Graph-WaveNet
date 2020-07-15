@@ -9,11 +9,13 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import pickle
 import os
+from sklearn.preprocessing import RobustScaler
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 2 --in_dim=1
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --save ./garage/CRASH
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --save ./garage/CRASH
+# nohup python -u train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --save ./garage/CRASH > log_CRASH 2>&1 &
 # (Notice the CRASH can handle batch size 32 on server)
 parser = argparse.ArgumentParser()
 parser.add_argument('--device',type=str,default='cuda:0',help='')
@@ -36,7 +38,7 @@ parser.add_argument('--batch_size',type=int,default=32,help='batch size')
 parser.add_argument('--learning_rate',type=float,default=0.001,help='learning rate')
 parser.add_argument('--dropout',type=float,default=0.3,help='dropout rate')
 parser.add_argument('--weight_decay',type=float,default=0.0001,help='weight decay rate')
-parser.add_argument('--epochs',type=int,default=100,help='')
+parser.add_argument('--epochs',type=int,default=15,help='')
 parser.add_argument('--print_every',type=int,default=50,help='')
 # parser.add_argument('--seed',type=int,default=0,help='random seed')
 parser.add_argument('--save',type=str,default='./garage/syn',help='save path')
@@ -60,9 +62,28 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-        # normalize fmri & eeg to 0~1
-        # fmri_mat = (fmri_mat - fmri_mat.min()) / (fmri_mat.max() - fmri_mat.min())
-        # eeg_mat = (eeg_mat - eeg_mat.min()) / (eeg_mat.max() - eeg_mat.min())
+        
+        # Standardize data
+        num_subj, t_f, n_f = fmri_mat.shape
+        _, t_e, n_e = eeg_mat.shape
+        fmri_mat = fmri_mat.reshape(num_subj, -1)
+        _mean = fmri_mat.mean(0)
+        _std = fmri_mat.std(0)
+        fmri_mat -= _mean
+        fmri_mat /= _std
+        fmri_mat = fmri_mat.reshape(num_subj, t_f, n_f)
+        
+        eeg_mat = eeg_mat.reshape(num_subj, -1)
+        _mean = eeg_mat.mean(0)
+        _std = eeg_mat.std(0)
+        eeg_mat -= _mean
+        eeg_mat /= _std
+        eeg_mat = eeg_mat.reshape(num_subj, t_e, n_e)
+        
+        # Min-max normalization
+        fmri_mat = (fmri_mat - fmri_mat.min()) / (fmri_mat.max() - fmri_mat.min())
+        eeg_mat = (eeg_mat - eeg_mat.min()) / (eeg_mat.max() - eeg_mat.min())
+        # ipdb.set_trace()
         # region_assignment: {EEG_electrodes: brain region}
         inv_mapping = {} #{brain region: EEG_electrodes}
         for k, v in region_assignment.items():
@@ -131,7 +152,6 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                                         std=fmri_mat[:nTrain].std())
         scaler_E = util.StandardScaler(mean=eeg_mat[:nTrain].mean(), 
                                         std=eeg_mat[:nTrain].std())
-
         print(args)
         supports = {}
         supports['train'] = adj_train
@@ -177,7 +197,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             val_time = []
             train_time = []
             for i in range(1,args.epochs+1):
-                if i % 5 == 0:
+                if i % 2 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
                     for g in engine.optimizer.param_groups:
                         g['lr'] *= 0.9
@@ -189,41 +209,70 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 engine.set_state('train')
 
                 iter = 0
-                # TODO: cross-subject shuffle
-                # shuffle subject
-                train_idx = np.arange(nTrain)
+                # cross-subject shuffle
+                train_idx = np.arange(nTrain * batch_per_sub)
                 np.random.shuffle(train_idx)
-                for subj_id in train_idx:
-                    subj_F = scaler_F.transform(fmri_mat[subj_id, F_idxer, :])
-                    # E is only for outputs
-                    subj_E =  scaler_E.transform(eeg_mat[subj_id, E_idxer, :][offset:]) 
-                    # shuffle batch
-                    batch_idx = np.arange(batch_per_sub)
-                    np.random.shuffle(batch_idx)
-                    for batch_i in batch_idx:
-                        x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                        # x = []
-                        # for i in range(K):
-                        #     rpt_t = round((i+1)*F_t) - round(i*F_t)
-                        #     x.append(x_F[:, i:i+1, :].repeat(rpt_t, axis=1))
-                        # x = np.concatenate(x, axis=1)
-                        # x = torch.Tensor(x[...,None]).to(device).transpose(1, 3)
-                        x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
-                        y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                        y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
-                        y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                        y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+                for _train_idx in train_idx:
+                    subj_id = _train_idx // batch_per_sub
+                    batch_i = _train_idx % batch_per_sub
+
+                    x_F = fmri_mat[subj_id, F_idxer, :][:-offset][
+                                batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
+                    y_F = fmri_mat[subj_id, F_idxer, :][offset:][
+                                batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
+                    y_E = eeg_mat[subj_id, E_idxer, :][offset:][
+                                batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+                    
+                    metrics = engine.train_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                                                [subj_id]*args.batch_size)
+                    train_loss.append(metrics[0])
+                    train_mae.append(metrics[1])
+                    train_mape.append(metrics[2])
+                    train_rmse.append(metrics[3])
+                    if iter % args.print_every == 0 :
+                        log = 'Iter: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                        print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
+                    iter += 1
+
+                # # shuffle subject
+                # train_idx = np.arange(nTrain)
+                # np.random.shuffle(train_idx)
+                # for subj_id in train_idx:
+                #     # subj_F = scaler_F.transform(fmri_mat[subj_id, F_idxer, :])
+                #     subj_F = fmri_mat[subj_id, F_idxer, :]
+                #     # E is only for outputs
+                #     # subj_E =  scaler_E.transform(eeg_mat[subj_id, E_idxer, :][offset:])
+                #     subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
+                #     # shuffle batch
+                #     batch_idx = np.arange(batch_per_sub)
+                #     np.random.shuffle(batch_idx)
+                #     for batch_i in batch_idx:
+                #         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                #         # x = []
+                #         # for i in range(K):
+                #         #     rpt_t = round((i+1)*F_t) - round(i*F_t)
+                #         #     x.append(x_F[:, i:i+1, :].repeat(rpt_t, axis=1))
+                #         # x = np.concatenate(x, axis=1)
+                #         # x = torch.Tensor(x[...,None]).to(device).transpose(1, 3)
+                #         x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
+                #         y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                #         y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
+                #         y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                #         y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
                         
-                        metrics = engine.train_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
-                                                    [subj_id]*args.batch_size)
-                        train_loss.append(metrics[0])
-                        train_mae.append(metrics[1])
-                        train_mape.append(metrics[2])
-                        train_rmse.append(metrics[3])
-                        if iter % args.print_every == 0 :
-                            log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                            print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
-                        iter += 1
+                #         metrics = engine.train_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                #                                     [subj_id]*args.batch_size)
+                #         train_loss.append(metrics[0])
+                #         train_mae.append(metrics[1])
+                #         train_mape.append(metrics[2])
+                #         train_rmse.append(metrics[3])
+                #         if iter % args.print_every == 0 :
+                #             log = 'Iter: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
+                #             print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
+                #         iter += 1
 
                 t2 = time.time()
                 train_time.append(t2-t1)
@@ -238,9 +287,11 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 engine.set_state('val')
                 for subj_id in range(nValid):
                     # for F&E: nTrain + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
-                    subj_F = scaler_F.transform(fmri_mat[nTrain + subj_id, F_idxer, :])
+                    # subj_F = scaler_F.transform(fmri_mat[nTrain + subj_id, F_idxer, :])
+                    subj_F = fmri_mat[nTrain + subj_id, F_idxer, :]
                     # E is only for outputs
-                    subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
+                    # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
+                    subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
                     for batch_i in range(batch_per_sub):
                         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -274,7 +325,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 mvalid_rmse = np.mean(valid_rmse)
                 his_loss.append(mvalid_loss)
 
-                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
+                log = 'Epoch: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
                 print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
                 torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
@@ -519,9 +570,11 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         pred_Es = []
         for subj_id in range(nTest):
             # for F&E: nTrain + nValid + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
-            subj_F = scaler_F.transform(fmri_mat[nTrain + nValid + subj_id, F_idxer, :])
+            # subj_F = scaler_F.transform(fmri_mat[nTrain + nValid + subj_id, F_idxer, :])
+            subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
             # E is only for outputs
-            subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]) 
+            # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
+            subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:] 
             for batch_i in range(batch_per_sub):
                 x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -543,7 +596,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         
         reals = torch.stack(reals).cpu().numpy()
         reals = reals.reshape(-1, *reals.shape[2:])
-        pred_Es = torch.stack(pred_Es).cpu().numpy()
+        pred_Es = [pred_E.cpu().numpy() for pred_E in pred_Es]
+        pred_Es = np.stack(pred_Es)
         pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()
         # reals shape: (1984, 2, 80, 15); pred_F/Es shape:(1984, 80, 15)
 
@@ -556,8 +610,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         pred_Es = pred_Es.reshape((len(pred_Es),-1))
         viz_node_idx = 0
         plt.figure()
-        plt.plot(reals[viz_node_idx, :], label='real E')
-        plt.plot(pred_Es[viz_node_idx, :], label='pred E')
+        plt.plot(reals[viz_node_idx, :5000], label='real E')
+        plt.plot(pred_Es[viz_node_idx, :5000], label='pred E')
         plt.legend()
         plt.show()
 
@@ -655,7 +709,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    # main('garage/CRASH_epoch_4_1.79.pth')
-    main()
+    main('garage/CRASH_epoch_2_0.0.pth')
+    # main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

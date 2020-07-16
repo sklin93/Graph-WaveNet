@@ -246,8 +246,9 @@ class gwnet(nn.Module):
 class gwnet_diff_G(nn.Module):
     def __init__(self, device, num_nodes, dropout=0.3, supports_len=0,
                 gcn_bool=True, addaptadj=True,
-                in_dim=2,out_dim=12,residual_channels=32,dilation_channels=32,
-                skip_channels=256,end_channels=512,kernel_size=2,blocks=4,layers=2,
+                in_dim=2, out_dim=12, out_dim_f=5,
+                residual_channels=32, dilation_channels=32, skip_channels=256,
+                end_channels=512, kernel_size=2, blocks=4, layers=2,
                 out_nodes=64):
 
         super(gwnet_diff_G, self).__init__()
@@ -324,9 +325,15 @@ class gwnet_diff_G(nn.Module):
             nn.Conv2d(in_channels=end_channels*8, out_channels=out_dim,
                       kernel_size=(1,1), bias=True)
             )
-        self.end_mlp = nn.Sequential(
+
+        self.end_mlp_e = nn.Sequential(
             nn.LeakyReLU(), #nn.ReLU(inplace=True),
             nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
+                      kernel_size=(1,1), bias=True)
+            )
+        self.end_mlp_f = nn.Sequential(
+            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=out_dim, out_channels=out_dim_f,
                       kernel_size=(1,1), bias=True)
             )
 
@@ -493,6 +500,7 @@ class gwnet_diff_G(nn.Module):
         # del residual, x
 
         x = self.end_module(skip) #[batch_size, seq_len, num_nodes, 1]
+        x_f = self.end_mlp_f(x)
         x = x.transpose(1, 2)
-        x = self.end_mlp(x) #[batch_size, out_nodes, seq_len, 1]
-        return x
+        x = self.end_mlp_e(x) #[batch_size, out_nodes, seq_len, 1]
+        return x_f, x

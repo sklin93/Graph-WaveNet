@@ -123,6 +123,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
         dataloader = util.load_dataset_metr(args.data, args.batch_size, args.batch_size, 
                                             args.batch_size)
+        F_t = None
         
     if args.data == 'CRASH':
         nTrain = round(0.7 * len(adj_mx))
@@ -188,7 +189,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
                          args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                          supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
-                         args.blocks, args.layers, eeg_mat.shape[-1])
+                         args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t)
 
         if model_name is None:
             print("start training...",flush=True)
@@ -215,18 +216,23 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 for _train_idx in train_idx:
                     subj_id = _train_idx // batch_per_sub
                     batch_i = _train_idx % batch_per_sub
-
+                    # input current F
                     x_F = fmri_mat[subj_id, F_idxer, :][:-offset][
                                 batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
+                    # pred future F
                     y_F = fmri_mat[subj_id, F_idxer, :][offset:][
                                 batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
+                    # pred future E
                     y_E = eeg_mat[subj_id, E_idxer, :][offset:][
                                 batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    # map to current E
+                    # y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
+                    #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]                    
                     y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
                     
-                    metrics = engine.train_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                    metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
                                                 [subj_id]*args.batch_size)
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])
@@ -263,7 +269,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 #         y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 #         y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
                         
-                #         metrics = engine.train_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                #         metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
                 #                                     [subj_id]*args.batch_size)
                 #         train_loss.append(metrics[0])
                 #         train_mae.append(metrics[1])
@@ -292,6 +298,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     # E is only for outputs
                     # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
                     subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
+                    # subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
                     for batch_i in range(batch_per_sub):
                         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -301,7 +308,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                         y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
-                        metrics = engine.eval_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                        metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
                                                     [subj_id]*args.batch_size)
 
                         valid_loss.append(metrics[0])
@@ -373,7 +380,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         engine = trainer(dataloader['scaler'], args.in_dim, args.seq_length, args.num_nodes, 
                          args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                          supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
-                         args.blocks, args.layers, 5)
+                         args.blocks, args.layers, out_nodes=5, F_t=F_t)
         #TODO: out_node should be the graphOptions['nCommunities'] value in Utils/util.py for syn
 
         if model_name is None:
@@ -401,7 +408,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     trainy = torch.Tensor(y).to(device)
                     trainy = trainy.transpose(1, 3)
 
-                    metrics = engine.train_syn(trainx, trainy, F_t, G['train'], adj_idx)
+                    metrics = engine.train_syn(trainx, trainy, G['train'], adj_idx)
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])
                     train_mape.append(metrics[2])
@@ -427,7 +434,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     testy = torch.Tensor(y).to(device)
                     testy = testy.transpose(1, 3)
                     # [64, 2, 80, 15]
-                    metrics = engine.eval_syn(testx, testy, F_t, G['val'], adj_idx)
+                    metrics = engine.eval_syn(testx, testy, G['val'], adj_idx)
                     valid_loss.append(metrics[0])
                     valid_mae.append(metrics[1])
                     valid_mape.append(metrics[2])
@@ -467,8 +474,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             supports = None
 
         engine = trainer(scaler, args.in_dim, args.seq_length, args.num_nodes, args.nhid, args.dropout,
-                             args.learning_rate, args.weight_decay, device, supports, args.gcn_bool, 
-                             args.addaptadj, adjinit, args.kernel_size, args.blocks, args.layers)
+                        args.learning_rate, args.weight_decay, device, supports, args.gcn_bool, 
+                        args.addaptadj, adjinit, args.kernel_size, args.blocks, args.layers, F_t=F_t)
 
         if model_name is None:
             print("start training...",flush=True)
@@ -492,7 +499,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     trainy = torch.Tensor(y).to(device)
                     trainy = trainy.transpose(1, 3)
                     if args.data == 'syn':
-                        metrics = engine.train_syn(trainx, trainy, F_t, G)
+                        metrics = engine.train_syn(trainx, trainy, G)
                     else:
                         metrics = engine.train(trainx, trainy[:,0,:,:])
                     train_loss.append(metrics[0])
@@ -518,7 +525,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     testy = torch.Tensor(y).to(device)
                     testy = testy.transpose(1, 3)
                     if args.data == 'syn':
-                        metrics = engine.eval_syn(testx, testy, F_t, G)
+                        metrics = engine.eval_syn(testx, testy, G)
                     else:
                         metrics = engine.eval(testx, testy[:,0,:,:])
                     valid_loss.append(metrics[0])
@@ -566,7 +573,9 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
     if args.data == 'CRASH':
         engine.set_state('test')
-        reals = []
+        real_Fs = []
+        real_Es = []
+        pred_Fs = []
         pred_Es = []
         for subj_id in range(nTest):
             # for F&E: nTrain + nValid + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
@@ -574,7 +583,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
             subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
             # E is only for outputs
             # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
-            subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:] 
+            subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
+            # subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset] 
             for batch_i in range(batch_per_sub):
                 x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -584,18 +594,25 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
-                metrics = engine.eval_CRASH(x_F, y_F, y_E, F_t, region_assignment, 
+                metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
                                             [subj_id]*args.batch_size)
 
                 amae.append(metrics[2])
                 amape.append(metrics[3])
                 armse.append(metrics[4])
 
-                reals.append(y_E)
+                real_Fs.append(y_F)
+                real_Es.append(y_E)
+                pred_Fs.append(metrics[-2])
                 pred_Es.append(metrics[-1])
-        
-        reals = torch.stack(reals).cpu().numpy()
-        reals = reals.reshape(-1, *reals.shape[2:])
+        real_Fs = torch.stack(real_Fs).cpu().numpy()
+        real_Fs = real_Fs.reshape(-1, *real_Fs.shape[2:])
+        real_Es = torch.stack(real_Es).cpu().numpy()
+        real_Es = real_Es.reshape(-1, *real_Es.shape[2:])
+
+        pred_Fs = [pred_F.cpu().numpy() for pred_F in pred_Fs]
+        pred_Fs = np.stack(pred_Fs)
+        pred_Fs = pred_Fs.reshape(-1, *pred_Fs.shape[2:]).squeeze()
         pred_Es = [pred_E.cpu().numpy() for pred_E in pred_Es]
         pred_Es = np.stack(pred_Es)
         pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()
@@ -604,14 +621,25 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         # reverse slideing window --> results: (num_nodes, total_timesteps)
         # ret = util.inverse_sliding_window([reals[:, 0, :, :].squeeze(), pred_Es])
         # concatenate
-        reals = reals.squeeze().transpose(1,0,2)
-        reals = reals.reshape((len(reals), -1))
+        real_Fs = real_Fs.squeeze().transpose(1,0,2)
+        real_Fs = real_Fs.reshape((len(real_Fs), -1))
+        real_Es = real_Es.squeeze().transpose(1,0,2)
+        real_Es = real_Es.reshape((len(real_Es), -1))
+
+        pred_Fs = pred_Fs.transpose(1,0,2)
+        pred_Fs = pred_Fs.reshape((len(pred_Fs),-1))
         pred_Es = pred_Es.transpose(1,0,2)
         pred_Es = pred_Es.reshape((len(pred_Es),-1))
+
         viz_node_idx = 0
+        viz_num = 1000 # time length of visualization
         plt.figure()
-        plt.plot(reals[viz_node_idx, :5000], label='real E')
-        plt.plot(pred_Es[viz_node_idx, :5000], label='pred E')
+        plt.plot(real_Fs[viz_node_idx, :viz_num], label='real F')
+        plt.plot(pred_Fs[viz_node_idx, :viz_num], label='pred F')
+        plt.legend()
+        plt.figure()
+        plt.plot(real_Es[viz_node_idx, :viz_num], label='real E')
+        plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
         plt.legend()
         plt.show()
 
@@ -628,7 +656,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 testy = torch.Tensor(y).to(device)
                 testy = testy.transpose(1, 3)
                 # [64, 2, 80, 15]
-                metrics = engine.eval_syn(testx, testy, F_t, G)
+                metrics = engine.eval_syn(testx, testy, G)
                 amae.append(metrics[2])
                 amape.append(metrics[3])
                 armse.append(metrics[4])
@@ -645,7 +673,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 testy = torch.Tensor(y).to(device)
                 testy = testy.transpose(1, 3)
                 # [64, 2, 80, 15]
-                metrics = engine.eval_syn(testx, testy, F_t, G['test'], adj_idx)
+                metrics = engine.eval_syn(testx, testy, G['test'], adj_idx)
                 amae.append(metrics[2])
                 amape.append(metrics[3])
                 armse.append(metrics[4])
@@ -709,7 +737,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    main('garage/CRASH_epoch_2_0.0.pth')
+    main('garage/CRASH_epoch_1_0.0.pth')
     # main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

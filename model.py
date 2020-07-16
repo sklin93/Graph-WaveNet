@@ -82,6 +82,29 @@ class gcn2(nn.Module):
         h = F.dropout(h, self.dropout, training=self.training)
         return h
 
+#strictly pooling at end
+class pool(torch.nn.Module):
+    def __init__(self,in_channels,num_nodes_eeg,dropout,support_len, non_linearity=torch.tanh):
+        super(pool,self).__init__()
+        self.in_channels = in_channels
+        self.score_layer = gcn2(in_channels, 1, dropout, support_len)
+        self.num_nodes_eeg = num_nodes_eeg
+        self.non_linearity = non_linearity
+    def forward(self, x, *support):
+        #x = x.unsqueeze(-1) if x.dim() == 1 else x
+        score = self.score_layer(x,*support)
+        _,perm = torch.topk(score.squeeze(), self.num_nodes_eeg)
+        x = x.permute(0,2,1,3)
+        perm = torch.unsqueeze(perm, 2)
+        perm = torch.unsqueeze(perm, 3)
+        x = torch.gather(x, 1, perm.expand(-1,-1,x.size(2),x.size(3)))
+        x = x.permute(0,2,1,3)
+        perm = perm.permute(0,2,1,3)
+        score = torch.gather(score, 2, perm)
+        #find way to index topk nodes from x and from score layer
+        x = x * self.non_linearity(score)
+        return x
+
 class gwnet(nn.Module):
     def __init__(self, device, num_nodes, dropout=0.3, supports=None, 
                 gcn_bool=True, addaptadj=True, aptinit=None, 
@@ -336,6 +359,7 @@ class gwnet_diff_G(nn.Module):
             nn.Conv2d(in_channels=out_dim, out_channels=out_dim_f,
                       kernel_size=(1,1), bias=True)
             )
+        self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
 
         self.receptive_field = receptive_field
 
@@ -501,6 +525,10 @@ class gwnet_diff_G(nn.Module):
 
         x = self.end_module(skip) #[batch_size, seq_len, num_nodes, 1]
         x_f = self.end_mlp_f(x)
+        ########### USING POOL ########### 
+        # x = self.pooling(x, *new_supports)
+        ########### USING MLP ########### 
         x = x.transpose(1, 2)
         x = self.end_mlp_e(x) #[batch_size, out_nodes, seq_len, 1]
+        x = x.transpose(1, 2)
         return x_f, x

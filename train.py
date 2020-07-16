@@ -737,7 +737,7 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    main('garage/CRASH_epoch_1_0.0.pth')
-    # main()
+    # main('garage/CRASH_epoch_1_0.0.pth')
+    main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

@@ -90,7 +90,7 @@ class trainer():
             output = self.model(input)  #[batch_size, seq_len, num_nodes, 1]
 
         if pooltype == 'None':
-            predict = output[-1].permute(0,3,1,2)
+            predict = output[-1].transpose(1,3)
             predict = self.scaler[1].inverse_transform(predict)
         
         elif pooltype == 'avg':
@@ -153,7 +153,7 @@ class trainer():
         
         if pooltype == 'None':
             F = predict[0].transpose(1,3)
-            E = predict[-1].permute(0,3,1,2)
+            E = predict[-1].transpose(1,3)
             # E = self.scaler[1].inverse_transform(E)
 
         elif pooltype == 'avg':
@@ -223,11 +223,9 @@ class trainer():
 
             with torch.no_grad():
                 output = self.model(input, supports, aptinit)
-        
-        predict = output.transpose(1,3)
 
         if pooltype == 'None':
-            predict = output[-1].permute(0,3,1,2)
+            predict = output[-1].transpose(1, 3)
             predict = self.scaler[1].inverse_transform(predict)
 
         elif pooltype == 'avg':
@@ -279,7 +277,7 @@ class trainer():
 
         if pooltype == 'None':
             F = predict[0].transpose(1,3)
-            E = predict[-1].permute(0,3,1,2)
+            E = predict[-1].transpose(1,3)
             # E = self.scaler[1].inverse_transform(E)
 
         if pooltype == 'avg':

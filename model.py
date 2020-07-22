@@ -332,34 +332,83 @@ class gwnet_diff_G(nn.Module):
                                                               support_len=supports_len))
 
         self.end_module = nn.Sequential(
-            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.LeakyReLU(),
+            # nn.ReLU(),
             nn.Conv2d(in_channels=skip_channels, out_channels=end_channels,
                       kernel_size=(1,1), bias=True),
-            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.LeakyReLU(),
+            # nn.ReLU(),
             nn.Conv2d(in_channels=end_channels, out_channels=end_channels*2,
-                      kernel_size=(1,1), bias=True),
-            nn.LeakyReLU(), #nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=end_channels*2, out_channels=end_channels*4,
-                      kernel_size=(1,1), bias=True),
-            nn.LeakyReLU(), #nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=end_channels*4, out_channels=end_channels*8,
-                      kernel_size=(1,1), bias=True),
-            nn.LeakyReLU(), #nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=end_channels*8, out_channels=out_dim,
+                      kernel_size=(1,1), bias=True),            
+            )
+        # self.end_module_add = nn.Sequential(
+        #     nn.LeakyReLU(), #nn.ReLU(),
+        #     nn.Conv2d(in_channels=end_channels*2, out_channels=end_channels*4,
+        #               kernel_size=(1,1), bias=True),
+        #     nn.LeakyReLU(), #nn.ReLU(),
+        #     nn.Conv2d(in_channels=end_channels*4, out_channels=end_channels*8,
+        #               kernel_size=(1,1), bias=True),
+        #     nn.LeakyReLU(), #nn.ReLU(),
+        #     nn.Conv2d(in_channels=end_channels*8, out_channels=out_dim,
+        #               kernel_size=(1,1), bias=True)
+        #     )
+        self.end_module_add = nn.Sequential(
+            nn.LeakyReLU(),
+            # nn.ReLU(),
+            nn.Conv2d(in_channels=end_channels*2, out_channels=out_dim,
                       kernel_size=(1,1), bias=True)
             )
 
         self.end_mlp_e = nn.Sequential(
-            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            # nn.LeakyReLU(), 
+            nn.ReLU(),
             nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
                       kernel_size=(1,1), bias=True)
             )
+        self.end_mlp_e2 = nn.Sequential(
+            # nn.LeakyReLU(), 
+            nn.ReLU(),
+            nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
+                      kernel_size=(1,1), bias=True)
+            )
+        self.end_mlp_e3 = nn.Sequential(
+            # nn.LeakyReLU(), 
+            nn.ReLU(),
+            nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
+                      kernel_size=(1,1), bias=True)
+            )
+        # self.end_mlp_e = nn.Sequential(
+        #     nn.LeakyReLU(),
+        #     nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes*2,
+        #               kernel_size=(1,1), bias=True),
+        #     nn.LeakyReLU(),
+        #     nn.Conv2d(in_channels=out_nodes*2, out_channels=out_nodes,
+        #               kernel_size=(1,1), bias=True)
+        #     )
+        # self.end_mlp_e2 = nn.Sequential(
+        #     nn.LeakyReLU(),
+        #     nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes*2,
+        #               kernel_size=(1,1), bias=True),
+        #     nn.LeakyReLU(),
+        #     nn.Conv2d(in_channels=out_nodes*2, out_channels=out_nodes,
+        #               kernel_size=(1,1), bias=True)
+        #     )
+        # self.end_mlp_e3 = nn.Sequential(
+        #     nn.LeakyReLU(),
+        #     nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes*2,
+        #               kernel_size=(1,1), bias=True),
+        #     nn.LeakyReLU(),
+        #     nn.Conv2d(in_channels=out_nodes*2, out_channels=out_nodes,
+        #               kernel_size=(1,1), bias=True)
+        #     )
+
         self.end_mlp_f = nn.Sequential(
-            nn.LeakyReLU(), #nn.ReLU(inplace=True),
+            nn.LeakyReLU(), 
+            # nn.ReLU(),
             nn.Conv2d(in_channels=out_dim, out_channels=out_dim_f,
                       kernel_size=(1,1), bias=True)
             )
-        self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
+        # self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
 
         self.receptive_field = receptive_field
 
@@ -523,12 +572,18 @@ class gwnet_diff_G(nn.Module):
         # print(skip.shape)
         # del residual, x
 
-        x = self.end_module(skip) #[batch_size, seq_len, num_nodes, 1]
+        x = self.end_module(skip) 
+        x = self.end_module_add(x) #[batch_size, seq_len, num_nodes, 1]
         x_f = self.end_mlp_f(x)
         ########### USING POOL ########### 
         # x = self.pooling(x, *new_supports)
         ########### USING MLP ########### 
         x = x.transpose(1, 2)
-        x = self.end_mlp_e(x) #[batch_size, out_nodes, seq_len, 1]
-        x = x.transpose(1, 2)
-        return x_f, x
+        x1 = self.end_mlp_e(x) #[batch_size, out_nodes, seq_len, 1]
+        x1 = x1.transpose(1, 2)
+        x2 = self.end_mlp_e2(x)
+        x2 = x2.transpose(1, 2)
+        x3 = self.end_mlp_e3(x)
+        x3 = x3.transpose(1, 2)
+        
+        return x_f, x1, x2, x3

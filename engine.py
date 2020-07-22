@@ -21,7 +21,8 @@ class trainer():
             out_dim_f = int(seq_length//F_t)
             self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
-                               in_dim=in_dim, out_dim=seq_length, out_dim_f=out_dim_f, 
+                               in_dim=in_dim, out_dim=out_dim_f, out_dim_f=out_dim_f, 
+                               # in_dim=in_dim, out_dim=seq_length, out_dim_f=out_dim_f, 
                                residual_channels=nhid, dilation_channels=nhid, 
                                skip_channels=nhid*8, end_channels=nhid*16,
                                kernel_size=kernel_size, blocks=blocks, layers=layers, 
@@ -153,7 +154,8 @@ class trainer():
         
         if pooltype == 'None':
             F = predict[0].transpose(1,3)
-            E = predict[-1].transpose(1,3)
+            # E = predict[-1].transpose(1,3)
+            E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
             # E = self.scaler[1].inverse_transform(E)
 
         elif pooltype == 'avg':
@@ -176,8 +178,8 @@ class trainer():
         # loss = (self.loss(F.cpu(), real_F, 0.0) + self.loss(predict.cpu(), real_E, 0.0)).to(self.device)
         real_F = real_F.to(self.device)
         real_E = real_E.to(self.device)
-        # ipdb.set_trace()
-        loss = self.loss(F, real_F, 0.0) + self.loss(E, real_E, 0.0)
+
+        loss = self.loss(E, real_E, 0.0) + self.loss(F, real_F, 0.0)
         # loss = self.loss(E.cpu(), real_E, 0.0).to(self.device)
         loss.backward()
         if self.clip is not None:
@@ -277,7 +279,8 @@ class trainer():
 
         if pooltype == 'None':
             F = predict[0].transpose(1,3)
-            E = predict[-1].transpose(1,3)
+            # E = predict[-1].transpose(1,3)
+            E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
             # E = self.scaler[1].inverse_transform(E)
 
         if pooltype == 'avg':

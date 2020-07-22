@@ -38,7 +38,7 @@ parser.add_argument('--batch_size',type=int,default=32,help='batch size')
 parser.add_argument('--learning_rate',type=float,default=0.001,help='learning rate')
 parser.add_argument('--dropout',type=float,default=0.3,help='dropout rate')
 parser.add_argument('--weight_decay',type=float,default=0.0001,help='weight decay rate')
-parser.add_argument('--epochs',type=int,default=15,help='')
+parser.add_argument('--epochs',type=int,default=40,help='')
 parser.add_argument('--print_every',type=int,default=50,help='')
 # parser.add_argument('--seed',type=int,default=0,help='random seed')
 parser.add_argument('--save',type=str,default='./garage/syn',help='save path')
@@ -52,7 +52,7 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(999)
     torch.cuda.empty_cache()
 
-def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained model/ generated syn data
+def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly loading trained model/ generated syn data
     #set seed
     #torch.manual_seed(args.seed)
     #np.random.seed(args.seed)
@@ -94,6 +94,14 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         
         basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
         assert int(args.seq_length % basic_len) == 0
+        
+        # Y    = np.fft.fft(eeg_mat[0, :, 0])
+        # freq = np.arange(0, eeg_mat.shape[1]/640, 1/640)
+
+        # plt.figure()
+        # plt.plot( freq, np.abs(Y) )
+        # plt.show()
+        # ipdb.set_trace()
     
     elif args.data == 'syn':
         if  os.path.isfile(syn_file):
@@ -191,14 +199,28 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                          supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
                          args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t)
 
-        if model_name is None:
+        if model_name is None or finetune is True:
+            if finetune is True:
+                pretrained_dict = torch.load(model_name)
+                del pretrained_dict['end_module_add.1.weight']
+                del pretrained_dict['end_module_add.1.bias']
+                del pretrained_dict['end_mlp_e.1.weight'] 
+                del pretrained_dict['end_mlp_e.1.bias']
+                del pretrained_dict['end_mlp_f.1.weight']
+                del pretrained_dict['end_mlp_f.1.bias']
+                
+                model_dict = engine.model.state_dict()
+                pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+                model_dict.update(pretrained_dict) 
+                engine.model.load_state_dict(model_dict)
+
             print("start training...",flush=True)
 
             his_loss =[]
             val_time = []
             train_time = []
             for i in range(1,args.epochs+1):
-                if i % 2 == 0:
+                if i % 4 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
                     for g in engine.optimizer.param_groups:
                         g['lr'] *= 0.9
@@ -231,6 +253,11 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                     # y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
                     #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]                    
                     y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+
+                    _y_E = []
+                    for y_i in range(int(y_E.shape[-1]/F_t)):
+                        _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
+                    y_E = torch.stack(_y_E, -1)
                     
                     metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
                                                 [subj_id]*args.batch_size)
@@ -307,6 +334,11 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                         y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
                         y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+
+                        _y_E = []
+                        for y_i in range(int(y_E.shape[-1]/F_t)):
+                            _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
+                        y_E = torch.stack(_y_E, -1)
 
                         metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
                                                     [subj_id]*args.batch_size)
@@ -566,7 +598,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         engine.model.load_state_dict(torch.load(args.save+"_epoch_"+str(bestid+1)+"_"+str(
                                                         round(his_loss[bestid],2))+".pth"))
     else:
-        engine.model.load_state_dict(torch.load(model_name))
+        pretrained_dict = torch.load(model_name)
+        engine.model.load_state_dict(pretrained_dict)
     amae = []
     amape = []
     armse = []
@@ -594,6 +627,11 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
                 y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
+                _y_E = []
+                for y_i in range(int(y_E.shape[-1]/F_t)):
+                    _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
+                y_E = torch.stack(_y_E, -1)
+                
                 metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
                                             [subj_id]*args.batch_size)
 
@@ -638,6 +676,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
         plt.plot(pred_Fs[viz_node_idx, :viz_num], label='pred F')
         plt.legend()
         plt.figure()
+        # plt.plot(real_Es[viz_node_idx, :int(viz_num*F_t)], label='real E')
+        # plt.plot(pred_Es[viz_node_idx, :int(viz_num*F_t)], label='pred E')
         plt.plot(real_Es[viz_node_idx, :viz_num], label='real E')
         plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
         plt.legend()
@@ -737,7 +777,8 @@ def main(model_name=None, syn_file='syn_diffG.pkl'): # directly loading trained 
 
 if __name__ == "__main__":
     t1 = time.time()
-    # main('garage/CRASH_epoch_1_0.0.pth')
-    main()
+    # main('garage/CRASH_avgE_best.pth', finetune=True)
+    main('garage/CRASH_avgE_epoch_15_0.0.pth')
+    # main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

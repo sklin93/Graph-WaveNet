@@ -247,11 +247,11 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                                 batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
                     # pred future E
-                    y_E = eeg_mat[subj_id, E_idxer, :][offset:][
-                                batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    # y_E = eeg_mat[subj_id, E_idxer, :][offset:][
+                    #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     # map to current E
-                    # y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
-                    #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]                    
+                    y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
+                                batch_i * args.batch_size: (batch_i + 1) * args.batch_size]                    
                     y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
                     _y_E = []
@@ -259,7 +259,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                         _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
                     y_E = torch.stack(_y_E, -1)
                     
-                    metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
+                    metrics = engine.train_CRASH_Q(x_F, y_F, y_E, region_assignment, 
                                                 [subj_id]*args.batch_size)
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])
@@ -324,8 +324,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                     subj_F = fmri_mat[nTrain + subj_id, F_idxer, :]
                     # E is only for outputs
                     # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
-                    subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
-                    # subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
+                    # subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
+                    subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
                     for batch_i in range(batch_per_sub):
                         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -340,7 +340,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                             _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
                         y_E = torch.stack(_y_E, -1)
 
-                        metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
+                        metrics = engine.eval_CRASH_Q(x_F, y_F, y_E, region_assignment, 
                                                     [subj_id]*args.batch_size)
 
                         valid_loss.append(metrics[0])
@@ -616,8 +616,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
             subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
             # E is only for outputs
             # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
-            subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
-            # subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset] 
+            # subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
+            subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset] 
             for batch_i in range(batch_per_sub):
                 x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -632,7 +632,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                     _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
                 y_E = torch.stack(_y_E, -1)
                 
-                metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
+                metrics = engine.eval_CRASH_Q(x_F, y_F, y_E, region_assignment, 
                                             [subj_id]*args.batch_size)
 
                 amae.append(metrics[2])
@@ -651,9 +651,16 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
         pred_Fs = [pred_F.cpu().numpy() for pred_F in pred_Fs]
         pred_Fs = np.stack(pred_Fs)
         pred_Fs = pred_Fs.reshape(-1, *pred_Fs.shape[2:]).squeeze()
+
         pred_Es = [pred_E.cpu().numpy() for pred_E in pred_Es]
         pred_Es = np.stack(pred_Es)
-        pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()
+        # ipdb.set_trace()
+        # pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()
+        # from quantile loss
+        pred_Es_q1 = pred_Es[:,:,0:1,:,:].reshape(-1, *pred_Es.shape[3:]).squeeze()
+        pred_Es_q2 = pred_Es[:,:,1:2,:,:].reshape(-1, *pred_Es.shape[3:]).squeeze()
+        pred_Es_q3 = pred_Es[:,:,2:3,:,:].reshape(-1, *pred_Es.shape[3:]).squeeze()
+
         # reals shape: (1984, 2, 80, 15); pred_F/Es shape:(1984, 80, 15)
 
         # reverse slideing window --> results: (num_nodes, total_timesteps)
@@ -666,8 +673,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
 
         pred_Fs = pred_Fs.transpose(1,0,2)
         pred_Fs = pred_Fs.reshape((len(pred_Fs),-1))
-        pred_Es = pred_Es.transpose(1,0,2)
-        pred_Es = pred_Es.reshape((len(pred_Es),-1))
+        # pred_Es = pred_Es.transpose(1,0,2)
+        # pred_Es = pred_Es.reshape((len(pred_Es),-1))
+        pred_Es_q1 = pred_Es_q1.transpose(1,0,2)
+        pred_Es_q1 = pred_Es_q1.reshape((len(pred_Es_q1),-1))
+        pred_Es_q2 = pred_Es_q2.transpose(1,0,2)
+        pred_Es_q2 = pred_Es_q2.reshape((len(pred_Es_q2),-1))
+        pred_Es_q3 = pred_Es_q3.transpose(1,0,2)
+        pred_Es_q3 = pred_Es_q3.reshape((len(pred_Es_q3),-1))
 
         viz_node_idx = 0
         viz_num = 1000 # time length of visualization
@@ -679,7 +692,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
         # plt.plot(real_Es[viz_node_idx, :int(viz_num*F_t)], label='real E')
         # plt.plot(pred_Es[viz_node_idx, :int(viz_num*F_t)], label='pred E')
         plt.plot(real_Es[viz_node_idx, :viz_num], label='real E')
-        plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
+        # plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
+        plt.plot(pred_Es_q1[viz_node_idx, :viz_num], label='pred E Q1')
+        plt.plot(pred_Es_q2[viz_node_idx, :viz_num], label='pred E Q2')
+        plt.plot(pred_Es_q3[viz_node_idx, :viz_num], label='pred E Q3')
         plt.legend()
         plt.show()
 
@@ -778,7 +794,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
 if __name__ == "__main__":
     t1 = time.time()
     # main('garage/CRASH_avgE_best.pth', finetune=True)
-    main('garage/CRASH_avgE_epoch_15_0.0.pth')
-    # main()
+    # main('garage/CRASH_avgE_epoch_12_0.0.pth')
+    main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

@@ -4,6 +4,7 @@ import os
 import scipy.sparse as sp
 import torch
 from scipy.sparse import linalg
+from scipy.signal import butter,filtfilt, zpk2sos, sosfilt
 from Utils import graphTools
 from Utils import dataTools
 from Utils.CRASH_loader import *
@@ -576,3 +577,16 @@ def metric(pred, real):
     mape = masked_mape(pred,real,0.0).item()
     rmse = masked_rmse(pred,real,0.0).item()
     return mae,mape,rmse
+
+def butter_lowpass_filter(data, cutoff, fs, order=6):
+    nyq = 0.5*fs
+    normal_cutoff = cutoff / nyq
+
+    # z,p,k = butter(order, normal_cutoff, output="zpk", btype='low', analog=False)
+    # lesos = zpk2sos(z, p, k)
+    # y = sosfilt(lesos, data)
+    # return y
+
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    y = filtfilt(b, a, data)
+    return y

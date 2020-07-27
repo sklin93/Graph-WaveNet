@@ -1,25 +1,12 @@
 import torch.optim as optim
+import torch.nn as nn
 from model import *
 import Utils.util as util
 from torch.utils.checkpoint import checkpoint
 import ipdb
 
-class QuantileLoss(nn.Module):
-    def __init__(self, quantiles):
-        super().__init__()
-        self.quantiles = quantiles
-        
-    def forward(self, preds, target):
-        assert not target.requires_grad
-        # assert preds.size(0) == target.size(0)
-        losses = []
-        for i, q in enumerate(self.quantiles):
-            errors = target - preds[:, i:i+1, :, :] #torch.Size([16, 1, 64, 5])
-            losses.append(torch.max((q-1) * errors, q * errors))
-        
-        # loss = torch.mean(torch.sum(torch.cat(losses, dim=1), dim=1))
-        loss = torch.cat(losses, dim=1).mean(1).mean()
-        return loss
+def MSPELoss(yhat,y):
+    return torch.mean((yhat-y)**2 / y**2)
 
 class trainer():
     def __init__(self, scaler, in_dim, seq_length, num_nodes, nhid , 
@@ -38,8 +25,8 @@ class trainer():
             out_dim_f = int(seq_length//F_t)
             self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
-                               in_dim=in_dim, out_dim=out_dim_f, out_dim_f=out_dim_f, 
-                               # in_dim=in_dim, out_dim=seq_length, out_dim_f=out_dim_f, 
+                               # in_dim=in_dim, out_dim=out_dim_f, out_dim_f=out_dim_f,
+                               in_dim=in_dim, out_dim=seq_length, out_dim_f=out_dim_f, 
                                residual_channels=nhid, dilation_channels=nhid, 
                                skip_channels=nhid*8, end_channels=nhid*16,
                                kernel_size=kernel_size, blocks=blocks, layers=layers, 
@@ -52,7 +39,8 @@ class trainer():
                                kernel_size=kernel_size, blocks=blocks, layers=layers)
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
-        self.loss = util.masked_mse #util.masked_mae
+        # self.loss = util.masked_mse #util.masked_mae
+        self.loss = nn.MSELoss() # MSPELoss
         self.scaler = scaler
         self.clip = 1 # TODO: tune, original 5
         self.supports = supports
@@ -60,7 +48,6 @@ class trainer():
         self.state = None
         self.device = device
         self.F_t = F_t
-        self.quantiles = [.03, .5, .97]
 
     def train(self, input, real_val):
         self.model.train()
@@ -197,52 +184,15 @@ class trainer():
         real_F = real_F.to(self.device)
         real_E = real_E.to(self.device)
 
-        loss = self.loss(E, real_E, 0.0) + self.loss(F, real_F, 0.0)
-        # loss = self.loss(E.cpu(), real_E, 0.0).to(self.device)
+        loss = self.loss(E, real_E) + self.loss(F, real_F)
+        # loss = self.loss(E.cpu(), real_E).to(self.device)
         loss.backward()
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
-        mae = util.masked_mae(E,real_E,0.0).item()
-        mape = util.masked_mape(E,real_E, 0.0).item()
-        rmse = util.masked_rmse(E,real_E, 0.0).item()
-        return loss.item(), mae, mape, rmse
-
-    def train_CRASH_Q(self, input, real_F, real_E, assign_dict, adj_idx):
-        '''output p=1 sequence, then deteministically subsample/average to F and E'''
-
-        # self.model = torch.nn.DataParallel(self.model, device_ids=[0, 1])
-        self.model.train()
-        self.optimizer.zero_grad()
-        input = nn.functional.pad(input,(1,0,0,0))
-
-        assert self.state is not None, 'set train/val/test state first'
-
-        supports = self.state_supports
-        supports = [supports[i][adj_idx] for i in range(len(supports))]
-        aptinit = self.aptinit[self.state]
-        if aptinit is not None:
-            aptinit = aptinit[adj_idx]
-
-        predict = self.model(input, supports, aptinit)
-        
-        F = predict[0].transpose(1,3)
-        E = torch.cat(predict[1:],-1).transpose(1,3)
-
-        real_F = real_F.to(self.device)
-        real_E = real_E.to(self.device)
-
-        qloss = QuantileLoss(self.quantiles)
-
-        loss = qloss(E, real_E) #+ self.loss(F, real_F)
-        # loss = self.loss(E.cpu(), real_E, 0.0).to(self.device)
-        loss.backward()
-        if self.clip is not None:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
-        self.optimizer.step()
-        mae = util.masked_mae(E,real_E,0.0).item()
-        mape = util.masked_mape(E,real_E, 0.0).item()
-        rmse = util.masked_rmse(E,real_E, 0.0).item()
+        mae = util.masked_mae(E,real_E,0).item()
+        mape = util.masked_mape(E,real_E,0).item()
+        rmse = util.masked_rmse(E,real_E,0).item()
         return loss.item(), mae, mape, rmse
 
     def eval(self, input, real_val):
@@ -349,37 +299,9 @@ class trainer():
         
         real_F = real_F.to(self.device)    
         real_E = real_E.to(self.device)
-        loss = self.loss(E, real_E, 0.0)
+        loss = self.loss(E, real_E) + self.loss(F, real_F)
         # loss = self.loss(E.cpu(), real_E).to(self.device)
-        mae = util.masked_mae(E,real_E,0.0).item()
-        mape = util.masked_mape(E,real_E, 0.0).item()
-        rmse = util.masked_rmse(E,real_E, 0.0).item()
-        return loss.item(), mae, mape, rmse, F, E
-
-    def eval_CRASH_Q(self, input, real_F, real_E, assign_dict, adj_idx):
-        self.model.eval()
-        input = nn.functional.pad(input,(1,0,0,0))
-
-        supports = self.state_supports
-        supports = [supports[i][adj_idx] for i in range(len(supports))]
-        aptinit = self.aptinit[self.state]
-        if aptinit is not None:
-            aptinit = aptinit[adj_idx]
-
-        with torch.no_grad():
-            predict = self.model(input, supports, aptinit)
-
-        F = predict[0].transpose(1,3)
-        E = torch.cat(predict[1:],-1).transpose(1,3)
-        
-        real_F = real_F.to(self.device)    
-        real_E = real_E.to(self.device)
-
-        qloss = QuantileLoss(self.quantiles)
-
-        loss = qloss(E, real_E)
-        # loss = self.loss(E.cpu(), real_E).to(self.device)
-        mae = util.masked_mae(E,real_E,0.0).item()
-        mape = util.masked_mape(E,real_E, 0.0).item()
-        rmse = util.masked_rmse(E,real_E, 0.0).item()
+        mae = util.masked_mae(E,real_E,0).item()
+        mape = util.masked_mape(E,real_E,0).item()
+        rmse = util.masked_rmse(E,real_E,0).item()
         return loss.item(), mae, mape, rmse, F, E

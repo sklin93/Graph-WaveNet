@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import os
+from tqdm import tqdm
+from scipy.spatial.distance import pdist, squareform
 import ipdb
 import matplotlib
 matplotlib.use('TkAgg')
@@ -28,9 +30,17 @@ coor_eeg = np.loadtxt(os.path.join(base_d, 'utils/eeg_coor_conv/ny_x_z'), usecol
 eeg_permute = [1, 0, 2]
 coor_eeg = coor_eeg[:, eeg_permute] #(64,3)
 
+# # distance matrix of eeg electrodes
+# dist_mat = squareform(pdist(coor_eeg))
+# # closest idx
+# dist_idx = np.zeros_like(dist_mat)
+# for i in range(64):
+# 	dist_idx[i] = np.argsort(dist_mat[i])
+# np.savetxt('dist_idx', dist_idx, fmt='% d')
+
 _coor_mri = []
 # for each mri region, assign it to the closest eeg electrode
-for i in range(200):
+for i in tqdm(range(200)):
     _coor_mri.append(coor_mri[coor_mri[:, -1] == (i+1)][:,:3].mean(0))
    
 coor_mri = np.stack(_coor_mri) #(200,3)
@@ -43,7 +53,8 @@ coor_mri = np.stack(_coor_mri) #(200,3)
 
 check_idxs = [0, 10, 30, 35, 40, 45] # 0-63
 
-for check_idx in check_idxs:
+# for check_idx in check_idxs:
+for check_idx in range(64):
 	fig = plt.figure()
 	ax = fig.add_subplot(311)
 	plt.scatter(coor_eeg[:,0], coor_eeg[:,2], color='gray')
@@ -68,4 +79,7 @@ for check_idx in check_idxs:
 	for mri_idx in list(e2r[check_idx]):
 		plt.scatter(coor_mri[mri_idx,1], coor_mri[mri_idx,2], color='blue')
 	ax.set_aspect('equal')
-	plt.show()
+
+	plt.savefig('wts_viz/'+str(check_idx)+'.png', dpi=900)
+
+# plt.show()

@@ -5,3 +5,4 @@ garage
 *nohup*
 *.pkl
 *.out
+wts_viz*

@@ -184,7 +184,7 @@ class trainer():
         real_F = real_F.to(self.device)
         real_E = real_E.to(self.device)
 
-        loss = self.loss(E, real_E) + self.loss(F, real_F)
+        loss = self.loss(E, real_E) #+ self.loss(F, real_F)
         # loss = self.loss(E.cpu(), real_E).to(self.device)
         loss.backward()
         if self.clip is not None:
@@ -299,7 +299,7 @@ class trainer():
         
         real_F = real_F.to(self.device)    
         real_E = real_E.to(self.device)
-        loss = self.loss(E, real_E) + self.loss(F, real_F)
+        loss = self.loss(E, real_E) #+ self.loss(F, real_F)
         # loss = self.loss(E.cpu(), real_E).to(self.device)
         mae = util.masked_mae(E,real_E,0).item()
         mape = util.masked_mape(E,real_E,0).item()

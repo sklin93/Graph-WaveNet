@@ -37,7 +37,7 @@ parser.add_argument('--blocks',type=int,default=4,help='number of blocks in gwne
 parser.add_argument('--batch_size',type=int,default=32,help='batch size')
 parser.add_argument('--learning_rate',type=float,default=0.001,help='learning rate')
 parser.add_argument('--dropout',type=float,default=0.3,help='dropout rate')
-parser.add_argument('--weight_decay',type=float,default=0.0001,help='weight decay rate')
+parser.add_argument('--weight_decay',type=float,default=0.01,help='weight decay rate')
 parser.add_argument('--epochs',type=int,default=40,help='')
 parser.add_argument('--print_every',type=int,default=50,help='')
 # parser.add_argument('--seed',type=int,default=0,help='random seed')
@@ -59,7 +59,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
 
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-        
+
         # Standardize data
         num_subj, t_f, n_f = fmri_mat.shape
         _, t_e, n_e = eeg_mat.shape
@@ -710,11 +710,11 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
 
         for viz_node_idx in range(64):
             viz_num = 5000 # time length of visualization
-            plt.figure()
-            plt.plot(real_Fs[viz_node_idx, :viz_num], label='real F')
-            plt.plot(pred_Fs[viz_node_idx, :viz_num], label='pred F')
-            plt.legend()
-            plt.savefig('nodes_rst/'+str(viz_node_idx)+'_F.png')
+            # plt.figure()
+            # plt.plot(real_Fs[viz_node_idx, :viz_num], label='real F')
+            # plt.plot(pred_Fs[viz_node_idx, :viz_num], label='pred F')
+            # plt.legend()
+            # plt.savefig('nodes_rst/'+str(viz_node_idx)+'_F.png')
 
             plt.figure()
             # plt.plot(real_Es[viz_node_idx, :int(viz_num*F_t)], label='real E')
@@ -723,6 +723,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
             plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
             plt.legend()
             plt.savefig('nodes_rst/'+str(viz_node_idx)+'_E.png')
+
         ipdb.set_trace()
         viz_node_idx = 0
         viz_num = 5000 # time length of visualization
@@ -836,7 +837,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
 if __name__ == "__main__":
     t1 = time.time()
     # main('garage/CRASH_avgE_best.pth', finetune=True)
-    main('garage/CRASH_epoch_2_0.0.pth')
-    # main()
+    main('garage/CRASH_epoch_10_0.0.pth')
+    main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

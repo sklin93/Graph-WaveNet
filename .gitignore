@@ -7,3 +7,5 @@ garage
 *.out
 wts_viz*
 nodes_rst*
+*.npy
+*tmp*

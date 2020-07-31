@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import pickle
 import os
 from sklearn.preprocessing import RobustScaler
+from kymatio.numpy import Scattering1D
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
@@ -52,7 +53,12 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(999)
     torch.cuda.empty_cache()
 
-def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly loading trained model/ generated syn data
+def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl', 
+         scatter=False, subsample=False):
+    '''directly loading trained model/ generated syn data
+       whether use wavelet scattering
+       whether subsample EEG signals to the same temporal resolution as fMRI's
+    '''
     #load data
     same_G = False
     device = torch.device(args.device)
@@ -60,26 +66,28 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
 
-        # Standardize data
-        num_subj, t_f, n_f = fmri_mat.shape
-        _, t_e, n_e = eeg_mat.shape
-        fmri_mat = fmri_mat.reshape(num_subj, -1)
-        _mean = fmri_mat.mean(0)
-        _std = fmri_mat.std(0)
-        fmri_mat -= _mean
-        fmri_mat /= _std
-        fmri_mat = fmri_mat.reshape(num_subj, t_f, n_f)
+        # # Standardize data
+        # num_subj, t_f, n_f = fmri_mat.shape
+        # _, t_e, n_e = eeg_mat.shape
+        # fmri_mat = fmri_mat.reshape(num_subj, -1)
+        # _mean = fmri_mat.mean(0)
+        # _std = fmri_mat.std(0)
+        # fmri_mat -= _mean
+        # fmri_mat /= _std
+        # fmri_mat = fmri_mat.reshape(num_subj, t_f, n_f)
         
-        eeg_mat = eeg_mat.reshape(num_subj, -1)
-        _mean = eeg_mat.mean(0)
-        _std = eeg_mat.std(0)
-        eeg_mat -= _mean
-        eeg_mat /= _std
-        eeg_mat = eeg_mat.reshape(num_subj, t_e, n_e)
+        # eeg_mat = eeg_mat.reshape(num_subj, -1)
+        # _mean = eeg_mat.mean(0)
+        # _std = eeg_mat.std(0)
+        # eeg_mat -= _mean
+        # eeg_mat /= _std
+        # eeg_mat = eeg_mat.reshape(num_subj, t_e, n_e)
 
-        # Min-max normalization
-        fmri_mat = (fmri_mat - fmri_mat.min()) / (fmri_mat.max() - fmri_mat.min()) # + 0.01
-        eeg_mat = (eeg_mat - eeg_mat.min()) / (eeg_mat.max() - eeg_mat.min()) # + 0.01
+        # # Min-max normalization
+        # fmri_mat = (fmri_mat - fmri_mat.min()) / (fmri_mat.max() - fmri_mat.min())
+        # eeg_mat = (eeg_mat - eeg_mat.min()) / (eeg_mat.max() - eeg_mat.min())
+        fmri_mat = fmri_mat / np.max(np.abs(fmri_mat))
+        eeg_mat = eeg_mat / np.max(np.abs(eeg_mat))
 
         '''
         print('eeg_mat min max:', eeg_mat.min(), eeg_mat.max())
@@ -127,7 +135,17 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
         
         basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
         assert int(args.seq_length % basic_len) == 0
-    
+
+        if scatter:
+            # wavelet consts
+            J = 6 # or smaller
+            Q = 2 # or smaller
+            scattering = Scattering1D(J, args.seq_length, Q)
+            meta = scattering.meta()
+            order0 = np.where(meta['order'] == 0) #1*45
+            order1 = np.where(meta['order'] == 1) #13*45
+            order2 = np.where(meta['order'] == 2) #28*45
+        
     elif args.data == 'syn':
         if  os.path.isfile(syn_file):
             with open(syn_file, 'rb') as handle:
@@ -219,10 +237,18 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
         print('Batch per subject:', batch_per_sub)
         # ipdb.set_trace() # sample_per_suj, batch_per_sub
 
-        engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
-                         args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
-                         supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
-                         args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t)
+        if scatter:
+            engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
+                             args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
+                             supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
+                             args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
+                             meta=[order0[0],order1[0],order2[0]])
+        else:
+            engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
+                             args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
+                             supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
+                             args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
+                             subsample=subsample)
 
         if model_name is None or finetune is True:
             if finetune is True:
@@ -276,18 +302,29 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                                 batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     # map to current E
                     # y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
-                    #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]                    
-                    y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+                    #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    if scatter:
+                        y_E = scattering(y_E.transpose(0,2,1))
+                        y_E[:,:,order0] *= 1000
+                        y_E[:,:,order1] *= 10000
+                        y_E[:,:,order2] *= 100000
 
-                    # _y_E = []
-                    # # use averaged E
-                    # for y_i in range(int(y_E.shape[-1]/F_t)):
-                    #     _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
-                    # # use subsampled E (use the mid point of each period)
-                    # # for y_i in range(int(y_E.shape[-1]/F_t)):
-                    # #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
-                    # y_E = torch.stack(_y_E, -1)
-                    
+                        y_E = y_E.reshape(*y_E.shape[:-2],-1)
+                        y_E = torch.Tensor(y_E[:,None,...])
+
+                    else:
+                        y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+                        
+                        if subsample:
+                            _y_E = []
+                            # use averaged E
+                            for y_i in range(int(y_E.shape[-1]/F_t)):
+                                _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
+                            # use subsampled E (use the mid point of each period)
+                            # for y_i in range(int(y_E.shape[-1]/F_t)):
+                            #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
+                            y_E = torch.stack(_y_E, -1)
+
                     metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
                                                 [subj_id]*args.batch_size)
                     train_loss.append(metrics[0])
@@ -362,16 +399,28 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                         y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
                         y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                        y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+  
+                        if scatter:
+                            y_E = scattering(y_E.transpose(0,2,1))
+                            y_E[:,:,order0] *= 1000
+                            y_E[:,:,order1] *= 10000
+                            y_E[:,:,order2] *= 100000
 
-                        # _y_E = []
-                        # # use averaged E
-                        # for y_i in range(int(y_E.shape[-1]/F_t)):
-                        #     _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
-                        # # use subsampled E (use the mid point of each period)
-                        # # for y_i in range(int(y_E.shape[-1]/F_t)):
-                        # #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
-                        # y_E = torch.stack(_y_E, -1)
+                            y_E = y_E.reshape(*y_E.shape[:-2],-1)
+                            y_E = torch.Tensor(y_E[:,None,...])
+                        
+                        else:
+                            y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+
+                            if subsample:
+                                _y_E = []
+                                # use averaged E
+                                for y_i in range(int(y_E.shape[-1]/F_t)):
+                                    _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
+                                # use subsampled E (use the mid point of each period)
+                                # for y_i in range(int(y_E.shape[-1]/F_t)):
+                                #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
+                                y_E = torch.stack(_y_E, -1)
 
                         metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
                                                     [subj_id]*args.batch_size)
@@ -658,16 +707,27 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                 y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
                 y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
-                # _y_E = []
-                # # use averaged E
-                # for y_i in range(int(y_E.shape[-1]/F_t)):
-                #     _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
-                # # use subsampled E (use the mid point of each period)
-                # # for y_i in range(int(y_E.shape[-1]/F_t)):
-                # #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
-                # y_E = torch.stack(_y_E, -1)
+                if scatter:
+                    y_E = scattering(y_E.transpose(0,2,1))
+                    y_E[:,:,order0] *= 1000
+                    y_E[:,:,order1] *= 10000
+                    y_E[:,:,order2] *= 100000
+
+                    y_E = y_E.reshape(*y_E.shape[:-2],-1)
+                    y_E = torch.Tensor(y_E[:,None,...])
+                else:
+                    y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
+
+                    if subsample:
+                        _y_E = []
+                        # use averaged E
+                        for y_i in range(int(y_E.shape[-1]/F_t)):
+                            _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
+                        # use subsampled E (use the mid point of each period)
+                        # for y_i in range(int(y_E.shape[-1]/F_t)):
+                        #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
+                        y_E = torch.stack(_y_E, -1)
 
                 metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
                                             [subj_id]*args.batch_size)
@@ -680,6 +740,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
                 real_Es.append(y_E)
                 pred_Fs.append(metrics[-2])
                 pred_Es.append(metrics[-1])
+
+                plt.figure()
+                plt.plot(real_Es[0][0,0,0], label='real Es')
+                plt.plot(pred_Es[0].cpu().numpy()[0,0,0], label='pred Es')
+                plt.legend()
+                plt.show()
+                ipdb.set_trace()
+
         real_Fs = torch.stack(real_Fs).cpu().numpy()
         real_Fs = real_Fs.reshape(-1, *real_Fs.shape[2:])
         real_Es = torch.stack(real_Es).cpu().numpy()
@@ -717,27 +785,31 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
             # plt.savefig('nodes_rst/'+str(viz_node_idx)+'_F.png')
 
             plt.figure()
-            # plt.plot(real_Es[viz_node_idx, :int(viz_num*F_t)], label='real E')
-            # plt.plot(pred_Es[viz_node_idx, :int(viz_num*F_t)], label='pred E')
-            plt.plot(real_Es[viz_node_idx, :viz_num], label='real E')
-            plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
+            if subsample:
+                plt.plot(real_Es[viz_node_idx, :int(viz_num*F_t)], label='real E')
+                plt.plot(pred_Es[viz_node_idx, :int(viz_num*F_t)], label='pred E')
+            else:
+                plt.plot(real_Es[viz_node_idx, :viz_num], label='real E')
+                plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
             plt.legend()
             plt.savefig('nodes_rst/'+str(viz_node_idx)+'_E.png')
 
         ipdb.set_trace()
+
         viz_node_idx = 0
         viz_num = 5000 # time length of visualization
         plt.figure()
         plt.plot(real_Fs[viz_node_idx, :viz_num], label='real F')
         plt.plot(pred_Fs[viz_node_idx, :viz_num], label='pred F')
-        
         plt.legend()
 
         plt.figure()
-        # plt.plot(real_Es[viz_node_idx, :int(viz_num*F_t)], label='real E')
-        # plt.plot(pred_Es[viz_node_idx, :int(viz_num*F_t)], label='pred E')
-        plt.plot(real_Es[viz_node_idx, :viz_num], label='real E')
-        plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
+        if subsample:
+            plt.plot(real_Es[viz_node_idx, :int(viz_num*F_t)], label='real E')
+            plt.plot(pred_Es[viz_node_idx, :int(viz_num*F_t)], label='pred E')
+        else:
+            plt.plot(real_Es[viz_node_idx, :viz_num], label='real E')
+            plt.plot(pred_Es[viz_node_idx, :viz_num], label='pred E')
         plt.legend()
         plt.show()
 
@@ -837,7 +909,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl'): # directly 
 if __name__ == "__main__":
     t1 = time.time()
     # main('garage/CRASH_avgE_best.pth', finetune=True)
-    main('garage/CRASH_epoch_10_0.0.pth')
-    main()
+    # main('garage/CRASH_wavelet_mae_epoch_7_0.08.pth')
+    main(scatter=True, subsample=False)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

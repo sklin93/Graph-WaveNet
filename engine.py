@@ -12,7 +12,7 @@ class trainer():
     def __init__(self, scaler, in_dim, seq_length, num_nodes, nhid , 
                 dropout, lrate, wdecay, device, supports, gcn_bool,
                 addaptadj, aptinit, kernel_size, blocks, layers, 
-                out_nodes=None, F_t=None):
+                out_nodes=None, F_t=None, meta=None, subsample=False):
 
         if type(supports) == dict: # different graph structure for each sample
             assert out_nodes is not None, 'need out_nodes number'
@@ -22,15 +22,23 @@ class trainer():
                 break
             if gcn_bool and addaptadj:
                 supports_len += 1
+
             out_dim_f = int(seq_length//F_t)
+            if meta is None:
+                if subsample:
+                    out_dim = out_dim_f #subsampled E
+                else:
+                    out_dim = seq_length #original E
+            else: #wavelet scattered E
+                out_dim = 1890
+
             self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
-                               # in_dim=in_dim, out_dim=out_dim_f, out_dim_f=out_dim_f,
-                               in_dim=in_dim, out_dim=seq_length, out_dim_f=out_dim_f, 
+                               in_dim=in_dim, out_dim=out_dim, out_dim_f=out_dim_f,
                                residual_channels=nhid, dilation_channels=nhid, 
                                skip_channels=nhid*8, end_channels=nhid*16,
                                kernel_size=kernel_size, blocks=blocks, layers=layers, 
-                               out_nodes=out_nodes)
+                               out_nodes=out_nodes, meta=meta)
         else:
             self.model = gwnet(device, num_nodes, dropout, supports=supports, 
                                gcn_bool=gcn_bool, addaptadj=addaptadj, aptinit=aptinit, 
@@ -39,8 +47,8 @@ class trainer():
                                kernel_size=kernel_size, blocks=blocks, layers=layers)
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
-        # self.loss = util.masked_mse #util.masked_mae
-        self.loss = nn.MSELoss() # MSPELoss
+        self.loss = util.masked_mae #util.masked_mse
+        # self.loss = nn.MSELoss() # MSPELoss
         self.scaler = scaler
         self.clip = 1 # TODO: tune, original 5
         self.supports = supports
@@ -48,6 +56,7 @@ class trainer():
         self.state = None
         self.device = device
         self.F_t = F_t
+        self.meta = meta
 
     def train(self, input, real_val):
         self.model.train()
@@ -158,10 +167,14 @@ class trainer():
         predict = self.model(input, supports, aptinit)
         
         if pooltype == 'None':
-            F = predict[0].transpose(1,3)
-            # E = predict[-1].transpose(1,3)
-            E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
-            # E = self.scaler[1].inverse_transform(E)
+            if self.meta is None:
+                F = predict[0].transpose(1,3)
+                # E = predict[-1].transpose(1,3)
+                E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
+                # E = self.scaler[1].inverse_transform(E)
+            else:
+                predict = [tmp.transpose(1,3) for tmp in predict]
+                E = torch.cat(predict,-1)
 
         elif pooltype == 'avg':
             predict = predict.transpose(1,3)
@@ -184,7 +197,7 @@ class trainer():
         real_F = real_F.to(self.device)
         real_E = real_E.to(self.device)
 
-        loss = self.loss(E, real_E) #+ self.loss(F, real_F)
+        loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
         # loss = self.loss(E.cpu(), real_E).to(self.device)
         loss.backward()
         if self.clip is not None:
@@ -283,10 +296,15 @@ class trainer():
             predict = self.model(input, supports, aptinit)
 
         if pooltype == 'None':
-            F = predict[0].transpose(1,3)
-            # E = predict[-1].transpose(1,3)
-            E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
-            # E = self.scaler[1].inverse_transform(E)
+            if self.meta is None:
+                F = predict[0].transpose(1,3)
+                # E = predict[-1].transpose(1,3)
+                E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
+                # E = self.scaler[1].inverse_transform(E)
+            else:
+                F = None
+                predict = [tmp.transpose(1,3) for tmp in predict]
+                E = torch.cat(predict,-1)
 
         if pooltype == 'avg':
             predict = predict.transpose(1,3)
@@ -299,7 +317,7 @@ class trainer():
         
         real_F = real_F.to(self.device)    
         real_E = real_E.to(self.device)
-        loss = self.loss(E, real_E) #+ self.loss(F, real_F)
+        loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
         # loss = self.loss(E.cpu(), real_E).to(self.device)
         mae = util.masked_mae(E,real_E,0).item()
         mape = util.masked_mape(E,real_E,0).item()

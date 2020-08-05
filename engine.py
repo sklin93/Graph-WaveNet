@@ -12,7 +12,8 @@ class trainer():
     def __init__(self, scaler, in_dim, seq_length, num_nodes, nhid , 
                 dropout, lrate, wdecay, device, supports, gcn_bool,
                 addaptadj, aptinit, kernel_size, blocks, layers, 
-                out_nodes=None, F_t=None, meta=None, subsample=False):
+                out_nodes=None, F_t=None, meta=None, subsample=False, 
+                scatter=False):
 
         if type(supports) == dict: # different graph structure for each sample
             assert out_nodes is not None, 'need out_nodes number'
@@ -30,7 +31,10 @@ class trainer():
                 else:
                     out_dim = seq_length #original E
             else: #wavelet scattered E
-                out_dim = 1890
+                if scatter:
+                    out_dim = seq_length
+                else:
+                    out_dim = 1890
 
             self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
@@ -38,7 +42,8 @@ class trainer():
                                residual_channels=nhid, dilation_channels=nhid, 
                                skip_channels=nhid*8, end_channels=nhid*16,
                                kernel_size=kernel_size, blocks=blocks, layers=layers, 
-                               out_nodes=out_nodes, meta=meta)
+                               out_nodes=out_nodes, meta=meta,
+                               scatter=scatter)
         else:
             self.model = gwnet(device, num_nodes, dropout, supports=supports, 
                                gcn_bool=gcn_bool, addaptadj=addaptadj, aptinit=aptinit, 
@@ -57,6 +62,7 @@ class trainer():
         self.device = device
         self.F_t = F_t
         self.meta = meta
+        self.scatter = scatter
 
     def train(self, input, real_val):
         self.model.train()
@@ -173,8 +179,15 @@ class trainer():
                 E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
                 # E = self.scaler[1].inverse_transform(E)
             else:
-                predict = [tmp.transpose(1,3) for tmp in predict]
-                E = torch.cat(predict,-1)
+                if self.scatter:
+                    E = predict[-1].squeeze()
+                    # E[:,:,self.meta[0]] *= 1000
+                    # E[:,:,self.meta[1]] *= 10000
+                    # E[:,:,self.meta[2]] *= 100000
+                else:
+                    # predict = [tmp.transpose(1,3) for tmp in predict]
+                    # E = torch.cat(predict,-1)
+                    E = torch.cat(predict,-1).transpose(2,3)
 
         elif pooltype == 'avg':
             predict = predict.transpose(1,3)
@@ -197,8 +210,19 @@ class trainer():
         real_F = real_F.to(self.device)
         real_E = real_E.to(self.device)
 
-        loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
-        # loss = self.loss(E.cpu(), real_E).to(self.device)
+        if self.meta is None:
+            loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
+            # loss = self.loss(E.cpu(), real_E).to(self.device)
+        else:
+            # # more penalty on the first order
+            # loss = 4 * self.loss(E[:,:,self.meta[0]], real_E[:,:,self.meta[0]], 
+            #     0.0) / 7 + 2 * self.loss(E[:,:,self.meta[1]], real_E[:,:,self.meta[1]], 
+            #     0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
+            
+            # train on the first order
+            real_E = real_E[:,:,self.meta[0]].squeeze()
+            loss = self.loss(E, real_E, 0.0)
+
         loss.backward()
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
@@ -302,10 +326,18 @@ class trainer():
                 E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
                 # E = self.scaler[1].inverse_transform(E)
             else:
-                F = None
-                predict = [tmp.transpose(1,3) for tmp in predict]
-                E = torch.cat(predict,-1)
-
+                if self.scatter:
+                    F = predict[0] ### NOT F! just use its place to hold the output signal
+                    E = predict[-1].squeeze() ### the wavelet coefficients
+                    # E[:,:,self.meta[0]] *= 1000
+                    # E[:,:,self.meta[1]] *= 10000
+                    # E[:,:,self.meta[2]] *= 100000
+                else:
+                    F = None
+                    # predict = [tmp.transpose(1,3) for tmp in predict]
+                    # E = torch.cat(predict,-1)
+                    E = torch.cat(predict,-1).transpose(2,3)
+                    
         if pooltype == 'avg':
             predict = predict.transpose(1,3)
             # E from predict & expand
@@ -317,8 +349,20 @@ class trainer():
         
         real_F = real_F.to(self.device)    
         real_E = real_E.to(self.device)
-        loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
-        # loss = self.loss(E.cpu(), real_E).to(self.device)
+
+        if self.meta is None:
+            loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
+            # loss = self.loss(E.cpu(), real_E).to(self.device)
+        else:
+            # # more penalty on the first order
+            # loss = 4 * self.loss(E[:,:,self.meta[0]], real_E[:,:,self.meta[0]], 
+            #     0.0) / 7 + 2 * self.loss(E[:,:,self.meta[1]], real_E[:,:,self.meta[1]], 
+            #     0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
+            
+            # train on the first order
+            real_E = real_E[:,:,self.meta[0]].squeeze()
+            loss = self.loss(E, real_E, 0.0)
+        
         mae = util.masked_mae(E,real_E,0).item()
         mape = util.masked_mape(E,real_E,0).item()
         rmse = util.masked_rmse(E,real_E,0).item()

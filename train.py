@@ -5,7 +5,7 @@ import time
 import Utils.util as util
 from engine import trainer
 import matplotlib
-matplotlib.use('TkAgg')
+#matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import pickle
 import os
@@ -15,9 +15,14 @@ import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 2 --in_dim=1
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --save ./garage/CRASH
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --weight_decay 0.011 --save ./garage/CRASH
 # nohup python -u train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --save ./garage/CRASH > log_CRASH 2>&1 &
 # (Notice the CRASH can handle batch size 32 on server)
+##### if using wavelet
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.00001 --weight_decay 0.0001 --save ./garage/CRASH_wavelet
+## on server
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 8 --learning_rate 0.0001 --weight_decay 0.0001 --device 'cuda:2' --save ./garage/CRASH_wavelet_mae
+#####
 parser = argparse.ArgumentParser()
 parser.add_argument('--device',type=str,default='cuda:0',help='')
 parser.add_argument('--data',type=str,default='data/METR-LA',help='data path')
@@ -66,28 +71,31 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
 
-        # # Standardize data
-        # num_subj, t_f, n_f = fmri_mat.shape
-        # _, t_e, n_e = eeg_mat.shape
-        # fmri_mat = fmri_mat.reshape(num_subj, -1)
-        # _mean = fmri_mat.mean(0)
-        # _std = fmri_mat.std(0)
-        # fmri_mat -= _mean
-        # fmri_mat /= _std
-        # fmri_mat = fmri_mat.reshape(num_subj, t_f, n_f)
-        
-        # eeg_mat = eeg_mat.reshape(num_subj, -1)
-        # _mean = eeg_mat.mean(0)
-        # _std = eeg_mat.std(0)
-        # eeg_mat -= _mean
-        # eeg_mat /= _std
-        # eeg_mat = eeg_mat.reshape(num_subj, t_e, n_e)
+        # if not scatter:
+        if True: #TODO: compare preprocessing performance difference
+            # Standardize data
+            num_subj, t_f, n_f = fmri_mat.shape
+            _, t_e, n_e = eeg_mat.shape
+            fmri_mat = fmri_mat.reshape(num_subj, -1)
+            _mean = fmri_mat.mean(0)
+            _std = fmri_mat.std(0)
+            fmri_mat -= _mean
+            fmri_mat /= _std
+            fmri_mat = fmri_mat.reshape(num_subj, t_f, n_f)
+            
+            eeg_mat = eeg_mat.reshape(num_subj, -1)
+            _mean = eeg_mat.mean(0)
+            _std = eeg_mat.std(0)
+            eeg_mat -= _mean
+            eeg_mat /= _std
+            eeg_mat = eeg_mat.reshape(num_subj, t_e, n_e)
 
-        # # Min-max normalization
-        # fmri_mat = (fmri_mat - fmri_mat.min()) / (fmri_mat.max() - fmri_mat.min())
-        # eeg_mat = (eeg_mat - eeg_mat.min()) / (eeg_mat.max() - eeg_mat.min())
-        fmri_mat = fmri_mat / np.max(np.abs(fmri_mat))
-        eeg_mat = eeg_mat / np.max(np.abs(eeg_mat))
+            # Min-max normalization
+            fmri_mat = (fmri_mat - fmri_mat.min()) / (fmri_mat.max() - fmri_mat.min())
+            eeg_mat = (eeg_mat - eeg_mat.min()) / (eeg_mat.max() - eeg_mat.min())
+        else:
+            fmri_mat = fmri_mat / np.max(np.abs(fmri_mat))
+            eeg_mat = eeg_mat / np.max(np.abs(eeg_mat))
 
         '''
         print('eeg_mat min max:', eeg_mat.min(), eeg_mat.max())
@@ -242,7 +250,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
                              args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
-                             meta=[order0[0],order1[0],order2[0]])
+                             meta=[order0[0],order1[0],order2[0]],scatter=True)
         else:
             engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
@@ -297,20 +305,21 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     y_F = fmri_mat[subj_id, F_idxer, :][offset:][
                                 batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
-                    # pred future E
-                    y_E = eeg_mat[subj_id, E_idxer, :][offset:][
-                                batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                    # map to current E
-                    # y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
+                    # # pred future E
+                    # y_E = eeg_mat[subj_id, E_idxer, :][offset:][
                     #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    # map to current E
+                    y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
+                                batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     if scatter:
-                        y_E = scattering(y_E.transpose(0,2,1))
-                        y_E[:,:,order0] *= 1000
-                        y_E[:,:,order1] *= 10000
-                        y_E[:,:,order2] *= 100000
+                        y_E = scattering(y_E.transpose(0,2,1))  #(16, 64, 42, 45)
+                        # y_E[:,:,order0] *= 1000
+                        # y_E[:,:,order1] *= 10000
+                        # y_E[:,:,order2] *= 100000
+                        # y_E = y_E.reshape(*y_E.shape[:-2],-1) #(16, 1, 64, 1890)
+                        # y_E = torch.Tensor(y_E[:,None,...])
 
-                        y_E = y_E.reshape(*y_E.shape[:-2],-1)
-                        y_E = torch.Tensor(y_E[:,None,...])
+                        y_E = torch.Tensor(y_E)
 
                     else:
                         y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
@@ -390,8 +399,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     subj_F = fmri_mat[nTrain + subj_id, F_idxer, :]
                     # E is only for outputs
                     # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
-                    subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
-                    # subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
+                    # subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
+                    subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
                     for batch_i in range(batch_per_sub):
                         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -402,12 +411,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
   
                         if scatter:
                             y_E = scattering(y_E.transpose(0,2,1))
-                            y_E[:,:,order0] *= 1000
-                            y_E[:,:,order1] *= 10000
-                            y_E[:,:,order2] *= 100000
+                            # y_E[:,:,order0] *= 1000
+                            # y_E[:,:,order1] *= 10000
+                            # y_E[:,:,order2] *= 100000
 
-                            y_E = y_E.reshape(*y_E.shape[:-2],-1)
-                            y_E = torch.Tensor(y_E[:,None,...])
+                            # y_E = y_E.reshape(*y_E.shape[:-2],-1)
+                            # y_E = torch.Tensor(y_E[:,None,...])
+
+                            y_E = torch.Tensor(y_E)
                         
                         else:
                             y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
@@ -698,8 +709,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
             # E is only for outputs
             # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
-            subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
-            # subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset] 
+            # subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
+            subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset] 
             for batch_i in range(batch_per_sub):
                 x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -709,13 +720,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
 
                 if scatter:
-                    y_E = scattering(y_E.transpose(0,2,1))
-                    y_E[:,:,order0] *= 1000
-                    y_E[:,:,order1] *= 10000
-                    y_E[:,:,order2] *= 100000
+                    sig = y_E.transpose(0,2,1)
+                    y_E = scattering(sig)
+                    # y_E[:,:,order0] *= 1000
+                    # y_E[:,:,order1] *= 10000
+                    # y_E[:,:,order2] *= 100000
 
-                    y_E = y_E.reshape(*y_E.shape[:-2],-1)
-                    y_E = torch.Tensor(y_E[:,None,...])
+                    # y_E = y_E.reshape(*y_E.shape[:-2],-1)
+                    # y_E = torch.Tensor(y_E[:,None,...])
+                    y_E = torch.Tensor(y_E)
                 else:
                     y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
@@ -741,11 +754,34 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 pred_Fs.append(metrics[-2])
                 pred_Es.append(metrics[-1])
 
+                ipdb.set_trace()
+                # # for checking predicted wavelet coeff
+                # plt.figure()
+                # plt.plot(real_Es[0][0,0].flatten(), label='real Es')
+                # plt.plot(pred_Es[0].cpu().numpy()[0,0].flatten(), label='pred Es')
+                # plt.legend()
+                # plt.show()
+
+                # # for checking prediction performance in the wavelet domain
+                # J = 6
+                # Q = 2
+                # scattering = Scattering1D(J, args.seq_length, Q)
+                # pred_s = scattering(pred_Es[0].cpu().numpy())
+                # real_s = scattering(real_Es[0])
+                # print(util.masked_mape(pred_s,real_s,0).item())
+
+                # for in-network scatter checking
                 plt.figure()
-                plt.plot(real_Es[0][0,0,0], label='real Es')
-                plt.plot(pred_Es[0].cpu().numpy()[0,0,0], label='pred Es')
+                plt.plot(sig[0,0], label='real')
+                plt.plot(pred_Fs[0].squeeze().cpu().numpy()[0,0], label='pred')
                 plt.legend()
-                plt.show()
+                plt.savefig('sig.png')
+
+                plt.figure()
+                plt.plot(real_Es[0].numpy()[0,0].flatten(), label='real')
+                plt.plot(pred_Es[0].cpu().numpy()[0,0].flatten(), label='pred')
+                plt.legend()
+                plt.savefig('coeff.png')
                 ipdb.set_trace()
 
         real_Fs = torch.stack(real_Fs).cpu().numpy()
@@ -909,7 +945,9 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 if __name__ == "__main__":
     t1 = time.time()
     # main('garage/CRASH_avgE_best.pth', finetune=True)
-    # main('garage/CRASH_wavelet_mae_epoch_7_0.08.pth')
+    # main('garage/CRASH_wavelet_mae_epoch_4_0.01.pth',scatter=True, subsample=False)
+    # main('garage/CRASH_epoch_2_0.03.pth')
     main(scatter=True, subsample=False)
+    # main()
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

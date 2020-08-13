@@ -19,7 +19,7 @@ import ipdb
 # nohup python -u train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --save ./garage/CRASH > log_CRASH 2>&1 &
 # (Notice the CRASH can handle batch size 32 on server)
 ##### if using wavelet
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.00001 --weight_decay 0.0001 --save ./garage/CRASH_wavelet
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 8 --learning_rate 0.00001 --weight_decay 0.0001 --save ./garage/CRASH_wavelet
 ## on server
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 8 --learning_rate 0.0001 --weight_decay 0.0001 --device 'cuda:2' --save ./garage/CRASH_wavelet_mae
 #####
@@ -59,10 +59,11 @@ if torch.cuda.is_available():
     torch.cuda.empty_cache()
 
 def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl', 
-         scatter=False, subsample=False):
+         scatter=False, subsample=False, map=False):
     '''directly loading trained model/ generated syn data
-       whether use wavelet scattering
-       whether subsample EEG signals to the same temporal resolution as fMRI's
+       scatter: whether use wavelet scattering
+       subsample: whether subsample EEG signals to the same temporal resolution as fMRI's
+       map: whether map to current EEG signal or (else) predict future EEG signal
     '''
     #load data
     same_G = False
@@ -71,8 +72,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
 
-        # if not scatter:
-        if True: #TODO: compare preprocessing performance difference
+        if not scatter:
+        # if True: #TODO: compare preprocessing performance difference
             # Standardize data
             num_subj, t_f, n_f = fmri_mat.shape
             _, t_e, n_e = eeg_mat.shape
@@ -153,7 +154,13 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             order0 = np.where(meta['order'] == 0) #1*45
             order1 = np.where(meta['order'] == 1) #13*45
             order2 = np.where(meta['order'] == 2) #28*45
-        
+            # load wavelet coefficient scalers
+            with open('coeffs_scaler.pkl', 'rb') as handle:
+                coeffs_scaler = pickle.load(handle)
+            # for transform: make it into same shape as y_E
+            mean = np.tile(coeffs_scaler['means'][None, None, ...], (args.batch_size, 64, 1, 1))
+            std = np.tile(coeffs_scaler['stds'][None, None, ...], (args.batch_size, 64, 1, 1))
+
     elif args.data == 'syn':
         if  os.path.isfile(syn_file):
             with open(syn_file, 'rb') as handle:
@@ -246,7 +253,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         # ipdb.set_trace() # sample_per_suj, batch_per_sub
 
         if scatter:
-            engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
+            # engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes,
+            engine = trainer(coeffs_scaler, args.in_dim, args.seq_length, args.num_nodes, 
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
                              args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
@@ -305,12 +313,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     y_F = fmri_mat[subj_id, F_idxer, :][offset:][
                                 batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
-                    # # pred future E
-                    # y_E = eeg_mat[subj_id, E_idxer, :][offset:][
-                    #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                    # map to current E
-                    y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
-                                batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    if map:
+                        # map to current E
+                        y_E = eeg_mat[subj_id, E_idxer, :][:-offset][
+                                    batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    else:
+                        # pred future E
+                        y_E = eeg_mat[subj_id, E_idxer, :][offset:][
+                                    batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     if scatter:
                         y_E = scattering(y_E.transpose(0,2,1))  #(16, 64, 42, 45)
                         # y_E[:,:,order0] *= 1000
@@ -319,6 +329,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         # y_E = y_E.reshape(*y_E.shape[:-2],-1) #(16, 1, 64, 1890)
                         # y_E = torch.Tensor(y_E[:,None,...])
 
+                        # standardize coeff
+                        y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
                         y_E = torch.Tensor(y_E)
 
                     else:
@@ -399,8 +411,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     subj_F = fmri_mat[nTrain + subj_id, F_idxer, :]
                     # E is only for outputs
                     # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
-                    # subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
-                    subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
+                    if map:
+                        subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
+                    else:
+                        subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
                     for batch_i in range(batch_per_sub):
                         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -418,6 +432,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                             # y_E = y_E.reshape(*y_E.shape[:-2],-1)
                             # y_E = torch.Tensor(y_E[:,None,...])
 
+                            # standardize coeff
+                            y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
                             y_E = torch.Tensor(y_E)
                         
                         else:
@@ -709,8 +725,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
             # E is only for outputs
             # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
-            # subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
-            subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset] 
+            if map:
+                subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset]
+            else:
+                subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
             for batch_i in range(batch_per_sub):
                 x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -728,7 +746,11 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                     # y_E = y_E.reshape(*y_E.shape[:-2],-1)
                     # y_E = torch.Tensor(y_E[:,None,...])
+                    
+                    # standardize coeff
+                    y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
                     y_E = torch.Tensor(y_E)
+
                 else:
                     y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
@@ -754,7 +776,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 pred_Fs.append(metrics[-2])
                 pred_Es.append(metrics[-1])
 
-                ipdb.set_trace()
                 # # for checking predicted wavelet coeff
                 # plt.figure()
                 # plt.plot(real_Es[0][0,0].flatten(), label='real Es')
@@ -771,6 +792,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 # print(util.masked_mape(pred_s,real_s,0).item())
 
                 # for in-network scatter checking
+                # ipdb.set_trace()
                 plt.figure()
                 plt.plot(sig[0,0], label='real')
                 plt.plot(pred_Fs[0].squeeze().cpu().numpy()[0,0], label='pred')
@@ -778,8 +800,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 plt.savefig('sig.png')
 
                 plt.figure()
-                plt.plot(real_Es[0].numpy()[0,0].flatten(), label='real')
-                plt.plot(pred_Es[0].cpu().numpy()[0,0].flatten(), label='pred')
+                plt.plot(real_Es[0].numpy()[1,1].flatten(), label='real')
+                plt.plot(pred_Es[0].cpu().numpy()[1,1].flatten(), label='pred')
                 plt.legend()
                 plt.savefig('coeff.png')
                 ipdb.set_trace()
@@ -945,7 +967,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 if __name__ == "__main__":
     t1 = time.time()
     # main('garage/CRASH_avgE_best.pth', finetune=True)
-    # main('garage/CRASH_wavelet_mae_epoch_4_0.01.pth',scatter=True, subsample=False)
+    main('garage/CRASH_wavelet_mse_pred_epoch_3_84.18.pth',scatter=True, subsample=False)
+    # main('garage/CRASH_wavelet_mae_epoch_5_4.02.pth',scatter=True, subsample=False, map=True)
     # main('garage/CRASH_epoch_2_0.03.pth')
     main(scatter=True, subsample=False)
     # main()

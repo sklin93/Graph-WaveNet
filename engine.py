@@ -52,8 +52,8 @@ class trainer():
                                kernel_size=kernel_size, blocks=blocks, layers=layers)
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
-        self.loss = util.masked_mae #util.masked_mse
-        # self.loss = nn.MSELoss() # MSPELoss
+        # self.loss = util.masked_mae #util.masked_mse
+        self.loss = nn.MSELoss() # MSPELoss
         self.scaler = scaler
         self.clip = 1 # TODO: tune, original 5
         self.supports = supports
@@ -184,6 +184,14 @@ class trainer():
                     # E[:,:,self.meta[0]] *= 1000
                     # E[:,:,self.meta[1]] *= 10000
                     # E[:,:,self.meta[2]] *= 100000
+                    
+                    # TODO: inverse? transform
+                    mean = torch.Tensor(self.scaler['means'][self.meta[0]][None,...]).repeat(
+                        E.shape[0],E.shape[1],1).to(self.device) #TODO: train on order0 for now
+                    std = torch.Tensor(self.scaler['stds'][self.meta[0]][None,...]).repeat(
+                        E.shape[0],E.shape[1],1).to(self.device)
+                    # E = (E * std) + mean
+                    E = ((E - mean)/std)
                 else:
                     # predict = [tmp.transpose(1,3) for tmp in predict]
                     # E = torch.cat(predict,-1)
@@ -220,8 +228,9 @@ class trainer():
             #     0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
             
             # train on the first order
-            real_E = real_E[:,:,self.meta[0]].squeeze()
-            loss = self.loss(E, real_E, 0.0)
+            # real_E = real_E[:,:,self.meta[0]]
+            real_E = real_E.squeeze()
+            loss = self.loss(E, real_E)#, 0.0)
 
         loss.backward()
         if self.clip is not None:
@@ -332,6 +341,14 @@ class trainer():
                     # E[:,:,self.meta[0]] *= 1000
                     # E[:,:,self.meta[1]] *= 10000
                     # E[:,:,self.meta[2]] *= 100000
+
+                    # # TODO: inverse transform
+                    mean = torch.Tensor(self.scaler['means'][self.meta[0]][None,...]).repeat(
+                        E.shape[0],E.shape[1],1).to(self.device) #TODO: train on order0 for now
+                    std = torch.Tensor(self.scaler['stds'][self.meta[0]][None,...]).repeat(
+                        E.shape[0],E.shape[1],1).to(self.device)
+                    # E = (E * std) + mean
+                    E = ((E - mean)/std)
                 else:
                     F = None
                     # predict = [tmp.transpose(1,3) for tmp in predict]
@@ -360,8 +377,9 @@ class trainer():
             #     0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
             
             # train on the first order
-            real_E = real_E[:,:,self.meta[0]].squeeze()
-            loss = self.loss(E, real_E, 0.0)
+            # real_E = real_E[:,:,self.meta[0]]
+            real_E = real_E.squeeze()
+            loss = self.loss(E, real_E)#, 0.0)
         
         mae = util.masked_mae(E,real_E,0).item()
         mape = util.masked_mape(E,real_E,0).item()

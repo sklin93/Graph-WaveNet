@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 
+from tqdm import tqdm
 import ipdb
 
 np.random.seed(0)
@@ -53,6 +54,23 @@ meta = scattering.meta()
 order0 = np.where(meta['order'] == 0) #1*45
 order1 = np.where(meta['order'] == 1) #13*45
 order2 = np.where(meta['order'] == 2) #28*45
+
+# # getting the coefficients scaler values: order0,1,2, together
+# coeffs = np.zeros((len(eeg_mat)*(eeg_len//seq_len), 42, 45))
+# ipdb.set_trace()
+# # for i in range(len(eeg_mat)): #eeg_mat:(241, 189282, 64)
+# for i in tqdm(range(len(eeg_mat))):
+# 	for chunk_id in range(len(eeg_mat[i])//seq_len):
+# 		chunck_sig = eeg_mat[i][chunk_id*seq_len:(chunk_id+1)*seq_len]
+# 		# coeffs.append(scattering(chunck_sig.transpose(1,0)))
+# 		coeffs[i] = scattering(chunck_sig)
+
+# ipdb.set_trace()
+# # calculate mean & std for all these 4
+# coeff0 = coeffs[:,order0[0]] 
+# coeff1 = coeffs[:,order0[1]]
+# coeff2 = coeffs[:,order0[2]]
+
 y = scattering(eeg_mat)
 y[:,:,order1] *= 10
 y[:,:,order2] *= 100

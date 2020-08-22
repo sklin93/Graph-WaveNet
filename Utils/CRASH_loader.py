@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 import ipdb
 from tqdm import tqdm
 
-base_d = '/home/sikun/Documents/data/MRI_EEG/'
+# base_d = '/home/sikun/Documents/data/MRI_EEG/'
+base_d = '/host/data/MRI_EEG'
 eeg_d = os.path.join(base_d, 'eeg')
 fmri_d = os.path.join(base_d, 'fmri/matfiles')
 fmri_bold_d = os.path.join(base_d, 'fmri/fmri_bold')

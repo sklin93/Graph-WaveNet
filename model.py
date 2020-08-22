@@ -287,7 +287,8 @@ class gwnet_diff_G(nn.Module):
         self.scatter = scatter
 
         if scatter:
-            J = 6
+            # J = 6 # real data
+            J = 2 # syn
             Q = 2
             self.scattering = Scattering1D(J, out_dim, Q)
 
@@ -340,168 +341,168 @@ class gwnet_diff_G(nn.Module):
                                                               support_len=supports_len))
 
         self.end_module = nn.Sequential(
-            nn.Tanh(), #nn.LeakyReLU(),
+            # nn.Tanh(), 
+            nn.LeakyReLU(),
             # nn.ReLU(),
             nn.Conv2d(in_channels=skip_channels, out_channels=end_channels,
-                      kernel_size=(1,1), bias=True),
-            nn.Tanh(), #nn.LeakyReLU(),
+                      kernel_size=(1,1)),#, bias=True),
+            # nn.Tanh(), 
+            nn.LeakyReLU(),
             # nn.ReLU(),
             nn.Conv2d(in_channels=end_channels, out_channels=end_channels*2,
-                      kernel_size=(1,1), bias=True),            
+                      kernel_size=(1,1)),#, bias=True),            
             )
-        # self.end_module_add = nn.Sequential(
-        #     nn.LeakyReLU(), #nn.ReLU(),
-        #     nn.Conv2d(in_channels=end_channels*2, out_channels=end_channels*4,
-        #               kernel_size=(1,1), bias=True),
-        #     nn.LeakyReLU(), #nn.ReLU(),
-        #     nn.Conv2d(in_channels=end_channels*4, out_channels=end_channels*8,
-        #               kernel_size=(1,1), bias=True),
-        #     nn.LeakyReLU(), #nn.ReLU(),
-        #     nn.Conv2d(in_channels=end_channels*8, out_channels=out_dim,
-        #               kernel_size=(1,1), bias=True)
-        #     )
 
-        if meta is None:
+        if (meta is None) or scatter:
             self.end_module_add = nn.Sequential(
-                nn.Tanh(), #nn.LeakyReLU(),
+                # nn.Tanh(), 
+                nn.LeakyReLU(),
                 # nn.ReLU(),
                 nn.Conv2d(in_channels=end_channels*2, out_channels=out_dim,
                           kernel_size=(1,1), bias=True)
                 )
             self.end_mlp_e = nn.Sequential(
-                nn.Tanh(), #nn.LeakyReLU(), 
+                # nn.Tanh(), 
+                nn.LeakyReLU(), 
                 # nn.ReLU(),
+                nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
+                          kernel_size=(1,1), bias=True)
+                )
+            # self.end_mlp_e2 = nn.Sequential(
+            #     # nn.Tanh(), 
+            #     nn.LeakyReLU(), 
+            #     # nn.ReLU(),
+            #     nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
+            #               kernel_size=(1,1), bias=True)
+            #     )
+            # self.end_mlp_e3 = nn.Sequential(
+            #     # nn.Tanh(), 
+            #     nn.LeakyReLU(), 
+            #     # nn.ReLU(),
+            #     nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
+            #               kernel_size=(1,1), bias=True)
+            #     )
+            if meta is None:
+                self.end_mlp_f = nn.Sequential(
+                    # nn.Tanh(),
+                    nn.LeakyReLU(), 
+                    # nn.ReLU(),
+                    nn.Conv2d(in_channels=out_dim, out_channels=out_dim_f,
+                              kernel_size=(1,1), bias=True)
+                    )
+                # self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
+            
+        else:
+            # if scatter:
+            #     self.end_module_add = nn.Sequential(
+            #     # nn.Tanh(), 
+            #     nn.LeakyReLU(),
+            #     # nn.ReLU(),
+            #     nn.Conv2d(in_channels=end_channels*2, out_channels=end_channels*4,
+            #               kernel_size=(1,1), bias=True),
+            #     # nn.Tanh(), 
+            #     nn.LeakyReLU(),
+            #     # nn.ReLU(),
+            #     nn.Conv2d(in_channels=end_channels*4, out_channels=out_dim,
+            #               kernel_size=(1,1), bias=True),
+            #     )
+            #     self.end_mlp_e = nn.Sequential(
+            #     # nn.Tanh(),
+            #     nn.LeakyReLU(), 
+            #     # nn.ReLU(),
+            #     nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
+            #               kernel_size=(1,1), bias=True)
+            #     )
+            # else:
+            nrow = len(meta[0]) + len(meta[1]) + len(meta[2])
+            assert out_dim%nrow == 0
+            ncol = int(out_dim / nrow)
+            assert meta is not None
+            assert ncol > len(meta[1]) and ncol > len(meta[2])
+            # pad rectangle shaped coeff (1st & 2nd orders)
+            self.ncol = ncol
+            self.coeff_pad1 = ncol - len(meta[1])
+            self.coeff_pad2 = ncol - len(meta[2])
+            # increase the num of feature dimension to ncol**2
+            self.coeff_conv = nn.Sequential(
+                nn.LeakyReLU(),
+                nn.Conv2d(in_channels=end_channels*2, 
+                          out_channels=ncol**2,
+                          kernel_size=(1,1), bias=True)
+                )
+            self.end_module_add1 = nn.Sequential(
+                nn.LeakyReLU(),
+                # nn.Conv2d(in_channels=end_channels*2, 
+                #           out_channels=len(meta[0]) * ncol,
+                #           kernel_size=(1,1), bias=True)
+                # nn.Conv2d(in_channels=ncol**2, 
+                #           out_channels=len(meta[0]) * ncol,
+                #           kernel_size=(1,1), bias=True),
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,13), bias=True),
+                nn.LeakyReLU(),
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,13), bias=True),
+                nn.LeakyReLU(),
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,11), bias=True),
+                nn.LeakyReLU(),
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,11), bias=True),
+                )
+            self.end_module_add2 = nn.Sequential(
+                nn.LeakyReLU(),
+                # nn.Conv2d(in_channels=end_channels*2, 
+                #           out_channels=len(meta[1]) * ncol,
+                #           kernel_size=(1,1), bias=True)
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,11), bias=True),
+                nn.LeakyReLU(),
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,11), bias=True),
+                nn.LeakyReLU(),
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,7), bias=True),
+                nn.LeakyReLU(),
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,7), bias=True),
+                )
+            self.end_module_add3 = nn.Sequential(
+                nn.LeakyReLU(),
+                # nn.Conv2d(in_channels=end_channels*2,
+                #           out_channels=len(meta[2]) * ncol,
+                #           kernel_size=(1,1), bias=True)
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,10), bias=True),
+                nn.LeakyReLU(),
+                nn.Conv2d(in_channels=num_nodes,
+                          out_channels=num_nodes,
+                          kernel_size=(1,9), bias=True),          
+                )                            
+            self.end_mlp_e = nn.Sequential(
+                nn.LeakyReLU(),
                 nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
                           kernel_size=(1,1), bias=True)
                 )
             self.end_mlp_e2 = nn.Sequential(
-                nn.Tanh(), #nn.LeakyReLU(), 
-                # nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
                           kernel_size=(1,1), bias=True)
                 )
             self.end_mlp_e3 = nn.Sequential(
-                nn.Tanh(), #nn.LeakyReLU(), 
-                # nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
                           kernel_size=(1,1), bias=True)
                 )
-
-            self.end_mlp_f = nn.Sequential(
-                nn.Tanh(), #nn.LeakyReLU(), 
-                # nn.ReLU(),
-                nn.Conv2d(in_channels=out_dim, out_channels=out_dim_f,
-                          kernel_size=(1,1), bias=True)
-                )
-            # self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
-            
-        else:
-            if scatter:
-                self.end_module_add = nn.Sequential(
-                nn.Tanh(), #nn.LeakyReLU(),
-                # nn.ReLU(),
-                nn.Conv2d(in_channels=end_channels*2, out_channels=end_channels*4,
-                          kernel_size=(1,1), bias=True),
-                nn.Tanh(), #nn.LeakyReLU(),
-                nn.Conv2d(in_channels=end_channels*4, out_channels=out_dim,
-                          kernel_size=(1,1), bias=True),
-                )
-                self.end_mlp_e = nn.Sequential(
-                nn.Tanh(), #nn.LeakyReLU(), 
-                # nn.ReLU(),
-                nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
-                          kernel_size=(1,1), bias=True)
-                )
-            else:
-                nrow = len(meta[0]) + len(meta[1]) + len(meta[2])
-                assert out_dim%nrow == 0
-                ncol = int(out_dim / nrow)
-                assert meta is not None
-                assert ncol > len(meta[1]) and ncol > len(meta[2])
-                # pad rectangle shaped coeff (1st & 2nd orders)
-                self.ncol = ncol
-                self.coeff_pad1 = ncol - len(meta[1])
-                self.coeff_pad2 = ncol - len(meta[2])
-                # increase the num of feature dimension to ncol**2
-                self.coeff_conv = nn.Sequential(
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=end_channels*2, 
-                              out_channels=ncol**2,
-                              kernel_size=(1,1), bias=True)
-                    )
-                self.end_module_add1 = nn.Sequential(
-                    nn.LeakyReLU(),
-                    # nn.Conv2d(in_channels=end_channels*2, 
-                    #           out_channels=len(meta[0]) * ncol,
-                    #           kernel_size=(1,1), bias=True)
-                    # nn.Conv2d(in_channels=ncol**2, 
-                    #           out_channels=len(meta[0]) * ncol,
-                    #           kernel_size=(1,1), bias=True),
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,13), bias=True),
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,13), bias=True),
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,11), bias=True),
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,11), bias=True),
-                    )
-                self.end_module_add2 = nn.Sequential(
-                    nn.LeakyReLU(),
-                    # nn.Conv2d(in_channels=end_channels*2, 
-                    #           out_channels=len(meta[1]) * ncol,
-                    #           kernel_size=(1,1), bias=True)
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,11), bias=True),
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,11), bias=True),
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,7), bias=True),
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,7), bias=True),
-                    )
-                self.end_module_add3 = nn.Sequential(
-                    nn.LeakyReLU(),
-                    # nn.Conv2d(in_channels=end_channels*2,
-                    #           out_channels=len(meta[2]) * ncol,
-                    #           kernel_size=(1,1), bias=True)
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,10), bias=True),
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes,
-                              out_channels=num_nodes,
-                              kernel_size=(1,9), bias=True),          
-                    )                            
-                self.end_mlp_e = nn.Sequential(
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
-                              kernel_size=(1,1), bias=True)
-                    )
-                self.end_mlp_e2 = nn.Sequential(
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
-                              kernel_size=(1,1), bias=True)
-                    )
-                self.end_mlp_e3 = nn.Sequential(
-                    nn.LeakyReLU(),
-                    nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
-                              kernel_size=(1,1), bias=True)
-                    )
 
         self.receptive_field = receptive_field
         self.meta = meta
@@ -665,34 +666,32 @@ class gwnet_diff_G(nn.Module):
 
         # print(skip.shape)
         # del residual, x
-
+        x = self.end_module(skip)
         if self.meta is None:
-            x = self.end_module(skip) 
+            
             x = self.end_module_add(x) #[batch_size, seq_len, num_nodes, 1]
-            x_f = self.end_mlp_f(x)
+            ### F prediction
+            x_f = self.end_mlp_f(x).transpose(1,3)
             ########### USING POOL ########### 
             # x = self.pooling(x, *new_supports)
             ########### USING MLP ########### 
             x = x.transpose(1, 2)
             x1 = self.end_mlp_e(x) #[batch_size, out_nodes, seq_len, 1]
-            x1 = x1.transpose(1, 2)
-            
-            x2 = self.end_mlp_e2(x)
-            x2 = x2.transpose(1, 2)
-            x3 = self.end_mlp_e3(x)
-            x3 = x3.transpose(1, 2)
-            
-            return x_f, x1, x2, x3
+            x1 = x1.transpose(2, 3)
+            # x2 = self.end_mlp_e2(x)
+            # x2 = x2.transpose(1, 2)
+            # x3 = self.end_mlp_e3(x)
+            # x3 = x3.transpose(1, 2)
+            return x_f, x1#, x2, x3
 
         else:
             # skip: [16, 256, 200, 1]
-            x = self.end_module(skip) # [16, 1024, 200, 1]
             if self.scatter:
                 x = self.end_module_add(x)
                 x = x.transpose(1, 2)
                 x = self.end_mlp_e(x)
-                sig = x.transpose(2,3)
-                return sig, self.scattering(sig)[:,:,:,self.meta[0]]
+                sig = x.transpose(2,3).contiguous()
+                return sig, self.scattering(sig)#[:,:,:,self.meta[0]]
 
             else:
                 x = self.coeff_conv(x)

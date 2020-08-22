@@ -9,12 +9,13 @@ import matplotlib
 import matplotlib.pyplot as plt
 import pickle
 import os
+import glob
 from sklearn.preprocessing import RobustScaler
 from kymatio.numpy import Scattering1D
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 2 --in_dim=1
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 2 --in_dim=1 --batch_size 64 --learning_rate 0.0001 --weight_decay 0.0001
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --weight_decay 0.011 --save ./garage/CRASH
 # nohup python -u train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --save ./garage/CRASH > log_CRASH 2>&1 &
 # (Notice the CRASH can handle batch size 32 on server)
@@ -32,7 +33,7 @@ parser.add_argument('--gcn_bool',action='store_true',help='whether to add graph 
 parser.add_argument('--aptonly',action='store_true',help='whether only adaptive adj')
 parser.add_argument('--addaptadj',action='store_true',help='whether add adaptive adj')
 parser.add_argument('--randomadj',action='store_true',help='whether random initialize adaptive adj')
-parser.add_argument('--seq_length',type=int,default=60,help='')
+parser.add_argument('--seq_length',type=int,default=120,help='')
 parser.add_argument('--nhid',type=int,default=32,help='')
 parser.add_argument('--in_dim',type=int,default=2,help='inputs dimension')
 parser.add_argument('--num_nodes',type=int,default=80,help='number of nodes')
@@ -171,10 +172,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                                          pkl_data['F_t'], pkl_data['G']
             print('synthetic data loaded')
         else:
-            nTrain = 100 # Number of training samples
+            nTrain = 200 #10 # Number of training samples
             nValid = int(0.2 * nTrain) # Number of validation samples
             nTest = int(0.2 * nTrain) # Number of testing samples
-            num_timestep = 1200
+            num_timestep = 2400
             dataloader, adj_mx, F_t, G = util.load_dataset_syn(args.adjtype, args.num_nodes,
                                                                nTrain, nValid, nTest, num_timestep,
                                                                args.seq_length, args.batch_size, 
@@ -185,6 +186,40 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         'adj_mx': adj_mx, 'F_t': F_t, 'G':G}
             with open(syn_file, 'wb') as handle:
                 pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+        if scatter:
+            # wavelet consts
+            J = 2 # or smaller
+            Q = 2 # or smaller
+            scattering = Scattering1D(J, args.seq_length, Q)
+            meta = scattering.meta()
+            order0 = np.where(meta['order'] == 0) #1*45
+            order1 = np.where(meta['order'] == 1) #13*45
+            order2 = np.where(meta['order'] == 2) #28*45
+
+            sname = 'syn_coeffs_scaler.pkl'
+            if os.path.isfile(sname):
+                # load wavelet coefficient scalers
+                with open(sname, 'rb') as handle:
+                    coeffs_scaler = pickle.load(handle)
+            else:
+                # calculate & save scaler coeff
+                coeffs = []
+                for iter, (_, y, _) in enumerate(dataloader['train_loader'].get_iterator()):
+                    coeffs.append(scattering(y.transpose(0,3,2,1)).squeeze())
+                coeffs_scaler = {}
+                coeffs_scaler['means'] = np.concatenate(coeffs).mean(0).mean(-1)
+                coeffs_scaler['stds'] = np.concatenate(coeffs).std(0).mean(-1)
+                with open(sname, 'wb') as handle:
+                    pickle.dump(coeffs_scaler, handle, protocol=pickle.HIGHEST_PROTOCOL)
+                del coeffs
+            # for transform: make it into same shape as y_E
+            mean = np.tile(coeffs_scaler['means'][None, None, ..., None], (args.batch_size, 1, 1, 1, 30))
+            std = np.tile(coeffs_scaler['stds'][None, None, ..., None], (args.batch_size, 1,1, 1, 30))
+            # TODO: now just train for order0
+            mean = mean[...,order0[0],:]
+            std = std[...,order0[0],:]
+
     else:
         sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata,args.adjtype)
         dataloader = util.load_dataset_metr(args.data, args.batch_size, args.batch_size, 
@@ -286,6 +321,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             his_loss =[]
             val_time = []
             train_time = []
+            min_loss = float('Inf')
             for i in range(1,args.epochs+1):
                 if i % 4 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
@@ -475,7 +511,16 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 log = 'Epoch: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
                 print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
-                torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+                # only save the best
+                if mvalid_loss < min_loss:
+                    min_loss = mvalid_loss
+                    # remove previous
+                    fname = glob.glob(args.save+'_epoch_*.pth')
+                    for f in fname:
+                        os.remove(f)
+                    # save new
+                    torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+                # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
 
@@ -518,10 +563,17 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         if args.aptonly:
             supports['train'] = supports['val'] = supports['test'] = None
 
-        engine = trainer(dataloader['scaler'], args.in_dim, args.seq_length, args.num_nodes, 
-                         args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
-                         supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
-                         args.blocks, args.layers, out_nodes=5, F_t=F_t)
+        if scatter:
+            engine = trainer(coeffs_scaler, args.in_dim, args.seq_length, args.num_nodes, 
+                             args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
+                             supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
+                             args.blocks, args.layers, out_nodes=5, F_t=F_t,
+                             meta=[order0[0],order1[0],order2[0]], scatter=True)
+        else:
+            engine = trainer(dataloader['scaler'], args.in_dim, args.seq_length, args.num_nodes, 
+                             args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
+                             supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
+                             args.blocks, args.layers, out_nodes=5, F_t=F_t)
         #TODO: out_node should be the graphOptions['nCommunities'] value in Utils/util.py for syn
 
         if model_name is None:
@@ -530,24 +582,36 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             his_loss =[]
             val_time = []
             train_time = []
+            min_loss = float('Inf')
+            lr = args.learning_rate
             for i in range(1,args.epochs+1):
-                #if i % 10 == 0:
-                    #lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
-                    #for g in engine.optimizer.param_groups:
-                        #g['lr'] = lr
+                if i % 1000 == 0:
+                    # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
+                    lr = max(0.000002, lr * 0.9)
+                    for g in engine.optimizer.param_groups:
+                        g['lr'] = lr
                 train_loss = []
                 train_mae = []
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
-                dataloader['train_loader'].shuffle()
+                # dataloader['train_loader'].shuffle() # (turned off for) overfit single batch
                 engine.set_state('train')
-
                 for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):
-                    trainx = torch.Tensor(x).to(device) # torch.Size([64, 15, 80, 2])
-                    trainx= trainx.transpose(1, 3) # torch.Size([64, 2, 80, 15])
-                    trainy = torch.Tensor(y).to(device)
-                    trainy = trainy.transpose(1, 3)
+                    # overfit single batch
+                    if iter > 0:
+                        break
+                    trainx = torch.Tensor(x).to(device) # [batch_size,5,80,1]
+                    trainx= trainx.transpose(1, 3) # [batch_size, 1, 80, 5]
+                    if scatter:
+                        # TODO: now train on the order0 only
+                        trainy = scattering(y.transpose(0,3,2,1))#[...,order0[0],:]
+                        # # scale 
+                        # trainy = ((trainy - mean)/std)
+                        trainy = torch.Tensor(trainy).to(device)
+                    else:
+                        trainy = torch.Tensor(y).to(device)
+                        trainy = trainy.transpose(1, 3)
 
                     metrics = engine.train_syn(trainx, trainy, G['train'], adj_idx)
                     train_loss.append(metrics[0])
@@ -569,12 +633,23 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 s1 = time.time()
                 engine.set_state('val')
-                for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
+                # for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
+                # overfit single batch
+                for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):                    
+                    if iter > 0:
+                        break
                     testx = torch.Tensor(x).to(device)
                     testx = testx.transpose(1, 3)
-                    testy = torch.Tensor(y).to(device)
-                    testy = testy.transpose(1, 3)
-                    # [64, 2, 80, 15]
+                    if scatter:
+                        # TODO: now train on the order0 only
+                        testy = scattering(y.transpose(0,3,2,1))#[...,order0[0],:]
+                        # # scale 
+                        # testy = ((testy - mean)/std)
+                        testy = torch.Tensor(testy).to(device)
+                    else:
+                        testy = torch.Tensor(y).to(device)
+                        testy = testy.transpose(1, 3)
+
                     metrics = engine.eval_syn(testx, testy, G['val'], adj_idx)
                     valid_loss.append(metrics[0])
                     valid_mae.append(metrics[1])
@@ -597,7 +672,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
                 print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
-                torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+                if mvalid_loss < min_loss:
+                    min_loss = mvalid_loss
+                    # remove previous
+                    fname = glob.glob(args.save+'_epoch_*.pth')
+                    for f in fname:
+                        os.remove(f)
+                    # save new
+                    torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+                # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
 
@@ -623,6 +706,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             his_loss =[]
             val_time = []
             train_time = []
+            min_loss = float('Inf')
             for i in range(1,args.epochs+1):
                 #if i % 10 == 0:
                     #lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
@@ -691,7 +775,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
                 print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
-                torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+                if mvalid_loss < min_loss:
+                    min_loss = mvalid_loss
+                    # remove previous
+                    fname = glob.glob(args.save+'_epoch_*.pth')
+                    for f in fname:
+                        os.remove(f)
+                    # save new                    
+                    torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+                # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time)))
 
@@ -895,12 +987,24 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             in_Fs = []
             reals = []
             # pred_Fs = []
-            pred_Es = []
-            for iter, (x, y, adj_idx) in enumerate(dataloader['test_loader'].get_iterator()):
+            sigs = []
+            preds = []
+            # for iter, (x, y, adj_idx) in enumerate(dataloader['test_loader'].get_iterator()):
+            # overfit single batch
+            for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):                    
+                if iter > 0:
+                    break            
                 testx = torch.Tensor(x).to(device)
                 testx = testx.transpose(1, 3)
-                testy = torch.Tensor(y).to(device)
-                testy = testy.transpose(1, 3)
+                if scatter:
+                    # TODO: now train on the order0 only
+                    testy = scattering(y.transpose(0,3,2,1))#[...,order0[0],:]
+                    # # scale 
+                    # testy = ((testy - mean)/std)
+                    testy = torch.Tensor(testy).to(device)
+                else:
+                    testy = torch.Tensor(y).to(device)
+                    testy = testy.transpose(1, 3)                
                 # [64, 2, 80, 15]
                 metrics = engine.eval_syn(testx, testy, G['test'], adj_idx)
                 amae.append(metrics[2])
@@ -909,18 +1013,35 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 in_Fs.append(testx)
                 reals.append(testy)
-                pred_Es.append(metrics[-1])
+                sigs.append(metrics[-2])
+                preds.append(metrics[-1])
             
+                if scatter:
+                    # for in-network scatter checking
+                    # ipdb.set_trace()
+                    sigs 
+                    plt.figure()
+                    plt.plot(y.transpose(0,3,2,1).squeeze()[1,1], label='real')
+                    plt.plot(sigs[0].cpu().numpy().squeeze()[1,1], label='pred')
+                    plt.legend()
+                    plt.savefig('sigs.png')
+                    # coeffs
+                    plt.figure()
+                    plt.plot(reals[0].cpu().numpy().squeeze()[1,1].flatten(), label='real')
+                    plt.plot(preds[0].cpu().numpy()[1,1].flatten(), label='pred')
+                    plt.legend()
+                    plt.savefig('coeff.png')
+                    ipdb.set_trace()
+
             in_Fs = torch.stack(in_Fs).cpu().numpy()
-            in_Fs = in_Fs.reshape(-1, *in_Fs.shape[2:]).squeeze()[:95]
+            in_Fs = in_Fs.reshape(-1, *in_Fs.shape[2:]).squeeze()
             reals = torch.stack(reals).cpu().numpy()
-            reals = reals.reshape(-1, *reals.shape[2:]).squeeze()[:95]
-            pred_Es = torch.stack(pred_Es).cpu().numpy()
-            pred_Es = pred_Es.reshape(-1, *pred_Es.shape[2:]).squeeze()[:95]
-            # reals shape: (1984, 2, 80, 15); pred_F/Es shape:(1984, 80, 15)
+            reals = reals.reshape(-1, *reals.shape[2:]).squeeze()
+            preds = torch.stack(preds).cpu().numpy()
+            preds = preds.reshape(-1, *preds.shape[2:]).squeeze()
 
             # reverse slideing window --> results: (num_nodes, total_timesteps)
-            ret = util.inverse_sliding_window([in_Fs, reals, pred_Es], [1]+[F_t]*2)
+            ret = util.inverse_sliding_window([in_Fs, reals, preds], [1]+[F_t]*2)
             viz_node_idx = 1
             plt.figure()
             plt.plot(ret[0][viz_node_idx, :].repeat(F_t), label='in F')
@@ -966,11 +1087,11 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
 if __name__ == "__main__":
     t1 = time.time()
-    # main('garage/CRASH_avgE_best.pth', finetune=True)
-    main('garage/CRASH_wavelet_mse_pred_epoch_3_84.18.pth',scatter=True, subsample=False)
-    # main('garage/CRASH_wavelet_mae_epoch_5_4.02.pth',scatter=True, subsample=False, map=True)
-    # main('garage/CRASH_epoch_2_0.03.pth')
-    main(scatter=True, subsample=False)
-    # main()
+    # main('garage/syn_epoch_24940_0.0.pth', finetune=True)
+    # main('garage/syn_epoch_24940_0.0.pth', scatter=True)
+    # main('garage/CRASH_wavelet_mae_epoch_5_4.02.pth',scatter=True, map=True)
+    # main('garage/syn_epoch_5988_0.04.pth')
+    main(syn_file='syn_batch32_diffG.pkl', scatter=True)
+    # main(syn_file='syn_batch32_sameG.pkl')
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

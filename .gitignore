@@ -3,9 +3,12 @@ garage
 *__pycache__*
 *log*
 *nohup*
-*.pkl
+*.pkl*
 *.out
 wts_viz*
 nodes_rst*
 *.npy
 *tmp*
+coeff.png
+sigs.png
+*.py~

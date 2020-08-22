@@ -276,7 +276,7 @@ class MultiModalityPrediction():
             # TODO: return x.reshape(-1, *x.shape[2:]) treats every sample as a same one
             # need differentiation when using different graphs
             '''
-            sample = sample.reshape(-1, *sample.shape[2:])
+            # sample = sample.reshape(-1, *sample.shape[2:])
             ret.append(sample)
         return ret
 

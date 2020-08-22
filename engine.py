@@ -14,7 +14,13 @@ class trainer():
                 addaptadj, aptinit, kernel_size, blocks, layers, 
                 out_nodes=None, F_t=None, meta=None, subsample=False, 
                 scatter=False):
-
+        '''
+        - F_t is the time interval between each F (input signals) using E (output) as the scale
+        - subsample controls whether output E is subsampled to the same temporal resolution as input F
+        - meta controls whether the model with predict scattering coefficients
+        - scatter controls whether the model contains scattering layer 
+          (if not, model will use conv layers to learn the coefficients)
+        '''
         if type(supports) == dict: # different graph structure for each sample
             assert out_nodes is not None, 'need out_nodes number'
             assert F_t is not None, 'need F_t number'
@@ -34,7 +40,8 @@ class trainer():
                 if scatter:
                     out_dim = seq_length
                 else:
-                    out_dim = 1890
+                    # out_dim = 1890 # real data 
+                    out_dim = 30 # syn
 
             self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
@@ -52,8 +59,8 @@ class trainer():
                                kernel_size=kernel_size, blocks=blocks, layers=layers)
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
-        # self.loss = util.masked_mae #util.masked_mse
-        self.loss = nn.MSELoss() # MSPELoss
+        self.loss = util.masked_mae #util.masked_mse
+        # self.loss = nn.MSELoss() # MSPELoss
         self.scaler = scaler
         self.clip = 1 # TODO: tune, original 5
         self.supports = supports
@@ -111,8 +118,23 @@ class trainer():
             output = self.model(input)  #[batch_size, seq_len, num_nodes, 1]
 
         if pooltype == 'None':
-            predict = output[-1].transpose(1,3)
-            predict = self.scaler[1].inverse_transform(predict)
+            if self.meta is None:
+                # predict = output[-1].transpose(1,3)
+                predict = output[-1].squeeze()
+                predict = self.scaler[1].inverse_transform(predict)
+            else:
+                if self.scatter:
+                    predict = output[-1].squeeze()
+                    # # scale
+                    # # TODO: now only predict order0
+                    # # make mean and std the same shape as predict
+                    # _mean = torch.Tensor(np.tile(self.scaler['means'][None,...][:,:,self.meta[0]], 
+                    #                 (len(predict),1,predict.shape[-1]))).to(self.device)
+                    # _std = torch.Tensor(np.tile(self.scaler['stds'][None,...][:,:,self.meta[0]], 
+                    #                 (len(predict),1,predict.shape[-1]))).to(self.device)
+                    # predict = ((predict - _mean)/_std)
+                else:
+                    ipdb.set_trace() #TODO
         
         elif pooltype == 'avg':
             predict = output.transpose(1,3)
@@ -143,8 +165,10 @@ class trainer():
         elif pooltype == 'subsample':
             pass #TODO
 
-        # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        real = real.squeeze()
         loss = self.loss(predict, real, 0.0)
+        # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+
         loss.backward()
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
@@ -174,9 +198,10 @@ class trainer():
         
         if pooltype == 'None':
             if self.meta is None:
-                F = predict[0].transpose(1,3)
+                F = predict[0]#.transpose(1,3)
                 # E = predict[-1].transpose(1,3)
-                E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
+                # E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
+                E = predict[-1].squeeze()
                 # E = self.scaler[1].inverse_transform(E)
             else:
                 if self.scatter:
@@ -219,6 +244,7 @@ class trainer():
         real_E = real_E.to(self.device)
 
         if self.meta is None:
+            real_E = real_E.squeeze()
             loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
             # loss = self.loss(E.cpu(), real_E).to(self.device)
         else:
@@ -230,7 +256,7 @@ class trainer():
             # train on the first order
             # real_E = real_E[:,:,self.meta[0]]
             real_E = real_E.squeeze()
-            loss = self.loss(E, real_E)#, 0.0)
+            loss = self.loss(E, real_E, 0.0)
 
         loss.backward()
         if self.clip is not None:
@@ -277,9 +303,26 @@ class trainer():
             with torch.no_grad():
                 output = self.model(input, supports, aptinit)
 
+        sig = None
         if pooltype == 'None':
-            predict = output[-1].transpose(1, 3)
-            predict = self.scaler[1].inverse_transform(predict)
+            if self.meta is None:
+                # predict = output[-1].transpose(1,3)
+                predict = output[-1].squeeze()
+                predict = self.scaler[1].inverse_transform(predict)
+            else:
+                if self.scatter:
+                    sig = output[0]
+                    predict = output[-1].squeeze()
+                    # # scale
+                    # # TODO: now only predict order0
+                    # # make mean and std the same shape as predict
+                    # _mean = torch.Tensor(np.tile(self.scaler['means'][None,...][:,:,self.meta[0]], 
+                    #                 (len(predict),1,predict.shape[-1]))).to(self.device)
+                    # _std = torch.Tensor(np.tile(self.scaler['stds'][None,...][:,:,self.meta[0]], 
+                    #                 (len(predict),1,predict.shape[-1]))).to(self.device)
+                    # predict = ((predict - _mean)/_std)                  
+                else:
+                    ipdb.set_trace() #TODO
 
         elif pooltype == 'avg':
             # F from predict & expand
@@ -308,12 +351,14 @@ class trainer():
         elif pooltype == 'subsample':
             pass #TODO
 
-        # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        real = real.squeeze()
         loss = self.loss(predict, real, 0.0)
+        # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+
         mae = util.masked_mae(predict,real,0.0).item()
         mape = util.masked_mape(predict,real,0.0).item()
         rmse = util.masked_rmse(predict,real,0.0).item()
-        return loss.item(), mae, mape, rmse, predict
+        return loss.item(), mae, mape, rmse, sig, predict
 
     def eval_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None'):
         self.model.eval()
@@ -379,7 +424,7 @@ class trainer():
             # train on the first order
             # real_E = real_E[:,:,self.meta[0]]
             real_E = real_E.squeeze()
-            loss = self.loss(E, real_E)#, 0.0)
+            loss = self.loss(E, real_E, 0.0)
         
         mae = util.masked_mae(E,real_E,0).item()
         mape = util.masked_mape(E,real_E,0).item()

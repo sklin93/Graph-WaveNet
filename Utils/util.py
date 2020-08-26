@@ -269,51 +269,52 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         return data, adj, F_t, G
     else:
         nTotal = nTrain + nValid + nTest
-        # Gs = []
-        # adjs = []
-        # F_xs = []
-        # # E_xs = []
-        # # F_ys = []
-        # E_ys = []
-        # for i in tqdm(range(nTotal)):
-        #     G = graphTools.Graph(graphType, nNodes, graphOptions)
-        #     G.computeGFT()
-        #     _data = dataTools.MultiModalityPrediction(G, K, 1, 0, 0, num_timestep, 
-        #                                               F_t=F_t, pooltype=pooltype, 
-        #                                               sigmaSpatial=sigmaSpatial, 
-        #                                               sigmaTemporal=sigmaTemporal,
-        #                                               rhoSpatial=rhoSpatial, 
-        #                                               rhoTemporal=rhoTemporal)
-        #     _data = _data.getSamples('train') # [F_x, E_x, F_y, E_y]
+        Gs = []
+        adjs = []
+        F_xs = []
+        # E_xs = []
+        # F_ys = []
+        E_ys = []
+        for i in tqdm(range(nTotal)):
+            G = graphTools.Graph(graphType, nNodes, graphOptions)
+            G.computeGFT()
+            _data = dataTools.MultiModalityPrediction(G, K, 1, 0, 0, num_timestep, 
+                                                      F_t=F_t, pooltype=pooltype, 
+                                                      sigmaSpatial=sigmaSpatial, 
+                                                      sigmaTemporal=sigmaTemporal,
+                                                      rhoSpatial=rhoSpatial, 
+                                                      rhoTemporal=rhoTemporal)
+            _data = _data.getSamples('train') # [F_x, E_x, F_y, E_y]
             
-        #     F_xs.append(_data[0])
-        #     # E_xs.append(_data[1])
-        #     # F_ys.append(_data[2])
-        #     E_ys.append(_data[3])
-        #     Gs.append(G)
-        #     adjs.append(mod_adj(G.W, adjtype))
+            F_xs.append(_data[0])
+            # E_xs.append(_data[1])
+            # F_ys.append(_data[2])
+            # E_ys.append(_data[3]) # future prediction
+            E_ys.append(_data[1]) # same time mapping
+            Gs.append(G)
+            adjs.append(mod_adj(G.W, adjtype))
 
-        # F_xs = np.concatenate(F_xs) #(2, 95, 5, 80)
-        # # E_xs = np.concatenate(E_xs)
-        # # F_ys = np.concatenate(F_ys)
-        # E_ys = np.concatenate(E_ys) #(2, 95, 120, 5)
+        F_xs = np.concatenate(F_xs) #(2, 95, 5, 80)
+        # E_xs = np.concatenate(E_xs)
+        # F_ys = np.concatenate(F_ys)
+        E_ys = np.concatenate(E_ys) #(2, 95, 120, 5)
 
-        ##### same G
-        G = graphTools.Graph(graphType, nNodes, graphOptions)
-        G.computeGFT() # Compute the eigendecomposition of the stored GSO
-        _data = dataTools.MultiModalityPrediction(G, K, nTrain, nValid, nTest, num_timestep, 
-                                                  F_t=F_t, pooltype=pooltype, 
-                                                  sigmaSpatial=sigmaSpatial, 
-                                                  sigmaTemporal=sigmaTemporal,
-                                                  rhoSpatial=rhoSpatial, 
-                                                  rhoTemporal=rhoTemporal)
-        Gs = [G] * nTotal
-        adjs = [mod_adj(G.W, adjtype)] * nTotal
-        F_xs = np.concatenate([_data.getSamples('train')[0],_data.getSamples('val')[0],
-                                                            _data.getSamples('test')[0]])
-        E_ys = np.concatenate([_data.getSamples('train')[3],_data.getSamples('val')[3],
-                                                            _data.getSamples('test')[3]])
-        #####
+        # ##### same G
+        # G = graphTools.Graph(graphType, nNodes, graphOptions)
+        # G.computeGFT() # Compute the eigendecomposition of the stored GSO
+        # _data = dataTools.MultiModalityPrediction(G, K, nTrain, nValid, nTest, num_timestep, 
+        #                                           F_t=F_t, pooltype=pooltype, 
+        #                                           sigmaSpatial=sigmaSpatial, 
+        #                                           sigmaTemporal=sigmaTemporal,
+        #                                           rhoSpatial=rhoSpatial, 
+        #                                           rhoTemporal=rhoTemporal)
+        # Gs = [G] * nTotal
+        # adjs = [mod_adj(G.W, adjtype)] * nTotal
+        # F_xs = np.concatenate([_data.getSamples('train')[0],_data.getSamples('val')[0],
+        #                                                     _data.getSamples('test')[0]])
+        # E_ys = np.concatenate([_data.getSamples('train')[3],_data.getSamples('val')[3],
+        #                                                     _data.getSamples('test')[3]])
+        # #####
 
         G = {}
         data = {}

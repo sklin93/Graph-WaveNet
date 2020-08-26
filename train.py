@@ -585,7 +585,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             min_loss = float('Inf')
             lr = args.learning_rate
             for i in range(1,args.epochs+1):
-                if i % 1000 == 0:
+                if i % 10 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
                     lr = max(0.000002, lr * 0.9)
                     for g in engine.optimizer.param_groups:
@@ -598,22 +598,25 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 # dataloader['train_loader'].shuffle() # (turned off for) overfit single batch
                 engine.set_state('train')
                 for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):
-                    # overfit single batch
-                    if iter > 0:
-                        break
+                    # # overfit single batch
+                    # if iter > 0:
+                    #     break
                     trainx = torch.Tensor(x).to(device) # [batch_size,5,80,1]
-                    trainx= trainx.transpose(1, 3) # [batch_size, 1, 80, 5]
+                    trainx = trainx.transpose(1, 3) # [batch_size, 1, 80, 5]
                     if scatter:
-                        # TODO: now train on the order0 only
-                        trainy = scattering(y.transpose(0,3,2,1))#[...,order0[0],:]
+                        trainy = scattering(y.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # order0 only
                         # # scale 
                         # trainy = ((trainy - mean)/std)
                         trainy = torch.Tensor(trainy).to(device)
+
+                        sigy = torch.Tensor(y).to(device)
+                        sigy = sigy.transpose(1, 3)[...,:10]
+                        metrics = engine.train_syn(trainx, [sigy, trainy], G['train'], adj_idx)
                     else:
                         trainy = torch.Tensor(y).to(device)
                         trainy = trainy.transpose(1, 3)
+                        metrics = engine.train_syn(trainx, trainy, G['train'], adj_idx)
 
-                    metrics = engine.train_syn(trainx, trainy, G['train'], adj_idx)
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])
                     train_mape.append(metrics[2])
@@ -633,24 +636,27 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 s1 = time.time()
                 engine.set_state('val')
-                # for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
-                # overfit single batch
-                for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):                    
-                    if iter > 0:
-                        break
+                for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
+                # # overfit single batch
+                # for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):                    
+                #     if iter > 0:
+                #         break
                     testx = torch.Tensor(x).to(device)
                     testx = testx.transpose(1, 3)
                     if scatter:
-                        # TODO: now train on the order0 only
-                        testy = scattering(y.transpose(0,3,2,1))#[...,order0[0],:]
+                        testy = scattering(y.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # order0 only
                         # # scale 
                         # testy = ((testy - mean)/std)
                         testy = torch.Tensor(testy).to(device)
+
+                        sigy = torch.Tensor(y).to(device)
+                        sigy = sigy.transpose(1, 3)[...,:10]
+                        metrics = engine.eval_syn(testx, [sigy, testy], G['val'], adj_idx)
                     else:
                         testy = torch.Tensor(y).to(device)
                         testy = testy.transpose(1, 3)
+                        metrics = engine.eval_syn(testx, testy, G['val'], adj_idx)
 
-                    metrics = engine.eval_syn(testx, testy, G['val'], adj_idx)
                     valid_loss.append(metrics[0])
                     valid_mae.append(metrics[1])
                     valid_mape.append(metrics[2])
@@ -859,9 +865,9 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
                                             [subj_id]*args.batch_size)
 
-                amae.append(metrics[2])
-                amape.append(metrics[3])
-                armse.append(metrics[4])
+                amae.append(metrics[1])
+                amape.append(metrics[2])
+                armse.append(metrics[3])
 
                 real_Fs.append(y_F)
                 real_Es.append(y_E)
@@ -978,51 +984,59 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 testy = testy.transpose(1, 3)
                 # [64, 2, 80, 15]
                 metrics = engine.eval_syn(testx, testy, G)
-                amae.append(metrics[2])
-                amape.append(metrics[3])
-                armse.append(metrics[4])
+                amae.append(metrics[1])
+                amape.append(metrics[2])
+                armse.append(metrics[3])
 
         else:
             engine.set_state('test')
             in_Fs = []
             reals = []
             # pred_Fs = []
-            sigs = []
+            if scatter:
+                sigs_pred = []
+                sigs_real = []
             preds = []
-            # for iter, (x, y, adj_idx) in enumerate(dataloader['test_loader'].get_iterator()):
+            for iter, (x, y, adj_idx) in enumerate(dataloader['test_loader'].get_iterator()):
             # overfit single batch
-            for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):                    
-                if iter > 0:
-                    break            
+            # for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):                    
+            #     if iter > 0:
+            #         break    
                 testx = torch.Tensor(x).to(device)
                 testx = testx.transpose(1, 3)
                 if scatter:
-                    # TODO: now train on the order0 only
-                    testy = scattering(y.transpose(0,3,2,1))#[...,order0[0],:]
+                    testy = scattering(y.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # order0 only
                     # # scale 
                     # testy = ((testy - mean)/std)
                     testy = torch.Tensor(testy).to(device)
+
+                    sigy = torch.Tensor(y).to(device)
+                    sigy = sigy.transpose(1, 3)[...,:10]
+                    metrics = engine.eval_syn(testx, [sigy, testy], G['val'], adj_idx)
+
+                    sigs_real.append(y)
+                    sigs_pred.append(metrics[-2])
+
                 else:
                     testy = torch.Tensor(y).to(device)
-                    testy = testy.transpose(1, 3)                
-                # [64, 2, 80, 15]
-                metrics = engine.eval_syn(testx, testy, G['test'], adj_idx)
-                amae.append(metrics[2])
-                amape.append(metrics[3])
-                armse.append(metrics[4])
+                    testy = testy.transpose(1, 3)
+                    metrics = engine.eval_syn(testx, testy, G['val'], adj_idx)
+
+                amae.append(metrics[1])
+                amape.append(metrics[2])
+                armse.append(metrics[3])
 
                 in_Fs.append(testx)
                 reals.append(testy)
-                sigs.append(metrics[-2])
                 preds.append(metrics[-1])
             
                 if scatter:
+                # if False:
                     # for in-network scatter checking
                     # ipdb.set_trace()
-                    sigs 
                     plt.figure()
-                    plt.plot(y.transpose(0,3,2,1).squeeze()[1,1], label='real')
-                    plt.plot(sigs[0].cpu().numpy().squeeze()[1,1], label='pred')
+                    plt.plot(sigs_real[0].transpose(0,3,2,1).squeeze()[1,1][...,:10], label='real')
+                    plt.plot(sigs_pred[0].cpu().numpy().squeeze()[1,1], label='pred')
                     plt.legend()
                     plt.savefig('sigs.png')
                     # coeffs
@@ -1033,22 +1047,43 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     plt.savefig('coeff.png')
                     ipdb.set_trace()
 
-            in_Fs = torch.stack(in_Fs).cpu().numpy()
-            in_Fs = in_Fs.reshape(-1, *in_Fs.shape[2:]).squeeze()
-            reals = torch.stack(reals).cpu().numpy()
-            reals = reals.reshape(-1, *reals.shape[2:]).squeeze()
-            preds = torch.stack(preds).cpu().numpy()
-            preds = preds.reshape(-1, *preds.shape[2:]).squeeze()
+            if scatter:
+                in_Fs = torch.stack(in_Fs).cpu().numpy()
+                in_Fs = in_Fs.reshape(-1, *in_Fs.shape[2:]).squeeze()
 
-            # reverse slideing window --> results: (num_nodes, total_timesteps)
-            ret = util.inverse_sliding_window([in_Fs, reals, preds], [1]+[F_t]*2)
-            viz_node_idx = 1
-            plt.figure()
-            plt.plot(ret[0][viz_node_idx, :].repeat(F_t), label='in F')
-            plt.plot(ret[1][viz_node_idx, :], label='real E')
-            plt.plot(ret[2][viz_node_idx, :], label='pred E')
-            plt.legend()
-            plt.show()
+                sigs_real = np.stack(sigs_real).squeeze().transpose(0,1,3,2)
+                sigs_real = sigs_real.reshape(-1, *sigs_real.shape[2:]).squeeze()
+                sigs_pred = torch.stack(sigs_pred).cpu().numpy()
+                sigs_pred = sigs_pred.reshape(-1, *sigs_pred.shape[2:]).squeeze()
+
+                # reverse slideing window --> results: (num_nodes, total_timesteps)
+                ret = util.inverse_sliding_window([in_Fs, sigs_real, sigs_pred], [1]+[F_t]*2)
+                viz_node_idx = 1
+                plt.figure()
+                plt.plot(ret[0][viz_node_idx, :].repeat(F_t)[:600], label='in F')
+                plt.plot(ret[1][viz_node_idx, :][:600], label='real E')
+                plt.plot(ret[2][viz_node_idx, :][:600], label='pred E')
+                plt.legend()
+                plt.show()
+                ipdb.set_trace()           
+            else:
+                in_Fs = torch.stack(in_Fs).cpu().numpy()
+                in_Fs = in_Fs.reshape(-1, *in_Fs.shape[2:]).squeeze()
+                reals = torch.stack(reals).cpu().numpy()
+                reals = reals.reshape(-1, *reals.shape[2:]).squeeze()
+                preds = torch.stack(preds).cpu().numpy()
+                preds = preds.reshape(-1, *preds.shape[2:]).squeeze()
+
+                # reverse slideing window --> results: (num_nodes, total_timesteps)
+                ret = util.inverse_sliding_window([in_Fs, reals, preds], [1]+[F_t]*2)
+                viz_node_idx = 1
+                plt.figure()
+                plt.plot(ret[0][viz_node_idx, :].repeat(F_t)[:3000], label='in F')
+                plt.plot(ret[1][viz_node_idx, :][:3000], label='real E')
+                plt.plot(ret[2][viz_node_idx, :][:3000], label='pred E')
+                plt.legend()
+                plt.show()
+                ipdb.set_trace()
 
         if model_name is None:
             log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
@@ -1088,10 +1123,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 if __name__ == "__main__":
     t1 = time.time()
     # main('garage/syn_epoch_24940_0.0.pth', finetune=True)
-    # main('garage/syn_epoch_24940_0.0.pth', scatter=True)
+    # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main('garage/CRASH_wavelet_mae_epoch_5_4.02.pth',scatter=True, map=True)
     # main('garage/syn_epoch_5988_0.04.pth')
     main(syn_file='syn_batch32_diffG.pkl', scatter=True)
-    # main(syn_file='syn_batch32_sameG.pkl')
+    # main(syn_file='syn_batch32_diffG.pkl')
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

@@ -8,6 +8,14 @@ import ipdb
 def MSPELoss(yhat,y):
     return torch.mean((yhat-y)**2 / y**2)
 
+# class MSLELoss(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         self.mse = nn.MSELoss()
+        
+#     def forward(self, pred, actual):
+#         return self.mse(torch.log(pred + 1), torch.log(actual + 1))
+
 class trainer():
     def __init__(self, scaler, in_dim, seq_length, num_nodes, nhid , 
                 dropout, lrate, wdecay, device, supports, gcn_bool,
@@ -41,7 +49,7 @@ class trainer():
                     out_dim = seq_length
                 else:
                     # out_dim = 1890 # real data 
-                    out_dim = 30 # syn
+                    out_dim = 5 #30 # syn
 
             self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
@@ -61,6 +69,7 @@ class trainer():
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)
         self.loss = util.masked_mae #util.masked_mse
         # self.loss = nn.MSELoss() # MSPELoss
+        # self.loss = nn.SmoothL1Loss() # HuberLoss
         self.scaler = scaler
         self.clip = 1 # TODO: tune, original 5
         self.supports = supports
@@ -124,6 +133,7 @@ class trainer():
                 predict = self.scaler[1].inverse_transform(predict)
             else:
                 if self.scatter:
+                    pred_sig = output[0].squeeze()
                     predict = output[-1].squeeze()
                     # # scale
                     # # TODO: now only predict order0
@@ -165,17 +175,28 @@ class trainer():
         elif pooltype == 'subsample':
             pass #TODO
 
-        real = real.squeeze()
-        loss = self.loss(predict, real, 0.0)
-        # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        if self.scatter:
+            loss = self.loss(pred_sig, real[0].squeeze(), 0.0) + self.loss(predict, real[1].squeeze(), 0.0)
+            # loss = self.loss(pred_sig, real[0].squeeze()) + self.loss(predict, real[1].squeeze())
+        else:
+            real = real.squeeze()
+            loss = self.loss(predict, real, 0.0)
+            # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
 
         loss.backward()
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
-        mae = util.masked_mae(predict,real,0.0).item()
-        mape = util.masked_mape(predict,real,0.0).item()
-        rmse = util.masked_rmse(predict,real,0.0).item()
+
+        if self.scatter:
+            mae = util.masked_mae(pred_sig, real[0].squeeze(), 0.0).item()
+            mape = util.masked_mape(pred_sig, real[0].squeeze(), 0.0).item()
+            rmse = util.masked_rmse(pred_sig, real[0].squeeze(), 0.0).item()
+        else:
+            mae = util.masked_mae(predict,real,0.0).item()
+            mape = util.masked_mape(predict,real,0.0).item()
+            rmse = util.masked_rmse(predict,real,0.0).item()
+
         return loss.item(), mae, mape, rmse
 
     def train_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None'):
@@ -303,7 +324,7 @@ class trainer():
             with torch.no_grad():
                 output = self.model(input, supports, aptinit)
 
-        sig = None
+        pred_sig = None
         if pooltype == 'None':
             if self.meta is None:
                 # predict = output[-1].transpose(1,3)
@@ -311,7 +332,7 @@ class trainer():
                 predict = self.scaler[1].inverse_transform(predict)
             else:
                 if self.scatter:
-                    sig = output[0]
+                    pred_sig = output[0].squeeze()
                     predict = output[-1].squeeze()
                     # # scale
                     # # TODO: now only predict order0
@@ -351,14 +372,24 @@ class trainer():
         elif pooltype == 'subsample':
             pass #TODO
 
-        real = real.squeeze()
-        loss = self.loss(predict, real, 0.0)
-        # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        if self.scatter:
+            loss = self.loss(pred_sig, real[0].squeeze(), 0.0) + self.loss(predict, real[1].squeeze(), 0.0)
+            # loss = self.loss(pred_sig, real[0].squeeze()) + self.loss(predict, real[1].squeeze())
+        else:
+            real = real.squeeze()
+            loss = self.loss(predict, real, 0.0)
+            # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
+        
+        if self.scatter:
+            mae = util.masked_mae(pred_sig, real[0].squeeze(), 0.0).item()
+            mape = util.masked_mape(pred_sig, real[0].squeeze(), 0.0).item()
+            rmse = util.masked_rmse(pred_sig, real[0].squeeze(), 0.0).item()
+        else:
+            mae = util.masked_mae(predict,real,0.0).item()
+            mape = util.masked_mape(predict,real,0.0).item()
+            rmse = util.masked_rmse(predict,real,0.0).item()
 
-        mae = util.masked_mae(predict,real,0.0).item()
-        mape = util.masked_mape(predict,real,0.0).item()
-        rmse = util.masked_rmse(predict,real,0.0).item()
-        return loss.item(), mae, mape, rmse, sig, predict
+        return loss.item(), mae, mape, rmse, pred_sig, predict
 
     def eval_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None'):
         self.model.eval()

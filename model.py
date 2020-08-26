@@ -286,12 +286,6 @@ class gwnet_diff_G(nn.Module):
         self.num_nodes = num_nodes
         self.scatter = scatter
 
-        if scatter:
-            # J = 6 # real data
-            J = 2 # syn
-            Q = 2
-            self.scattering = Scattering1D(J, out_dim, Q)
-
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()
         self.residual_convs = nn.ModuleList()
@@ -391,29 +385,13 @@ class gwnet_diff_G(nn.Module):
                               kernel_size=(1,1), bias=True)
                     )
                 # self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
-            
-        else:
-            # if scatter:
-            #     self.end_module_add = nn.Sequential(
-            #     # nn.Tanh(), 
-            #     nn.LeakyReLU(),
-            #     # nn.ReLU(),
-            #     nn.Conv2d(in_channels=end_channels*2, out_channels=end_channels*4,
-            #               kernel_size=(1,1), bias=True),
-            #     # nn.Tanh(), 
-            #     nn.LeakyReLU(),
-            #     # nn.ReLU(),
-            #     nn.Conv2d(in_channels=end_channels*4, out_channels=out_dim,
-            #               kernel_size=(1,1), bias=True),
-            #     )
-            #     self.end_mlp_e = nn.Sequential(
-            #     # nn.Tanh(),
-            #     nn.LeakyReLU(), 
-            #     # nn.ReLU(),
-            #     nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
-            #               kernel_size=(1,1), bias=True)
-            #     )
-            # else:
+            if scatter:
+                # J = 6 # real data
+                J = 2 # syn
+                Q = 2
+                self.scattering = Scattering1D(J, out_dim, Q)   
+         
+        else: # directly predicting scattering coefficient using conv layers
             nrow = len(meta[0]) + len(meta[1]) + len(meta[2])
             assert out_dim%nrow == 0
             ncol = int(out_dim / nrow)

@@ -68,7 +68,7 @@ class gcn2(nn.Module):
         self.dropout = dropout
         self.order = order
 
-    def forward(self,x,*support):
+    def forward(self,x, dummy_tensor, *support):
         out = [x]
         for a in support:
             # a: [64, 80, 80], x:[64, 32, 80, 15]
@@ -285,6 +285,7 @@ class gwnet_diff_G(nn.Module):
         self.device = device
         self.num_nodes = num_nodes
         self.scatter = scatter
+        self.out_dim = out_dim
 
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()
@@ -292,6 +293,7 @@ class gwnet_diff_G(nn.Module):
         self.skip_convs = nn.ModuleList()
         self.bn = nn.ModuleList()
         self.gconv = nn.ModuleList()
+        self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)
 
         self.start_conv = nn.Conv2d(in_channels=in_dim,
                                     out_channels=residual_channels,
@@ -326,7 +328,12 @@ class gwnet_diff_G(nn.Module):
                 self.skip_convs.append(nn.Conv2d(in_channels=dilation_channels,
                                                  out_channels=skip_channels,
                                                  kernel_size=(1, 1)))
-                self.bn.append(nn.BatchNorm2d(residual_channels))
+                # self.bn.append(nn.BatchNorm2d(residual_channels))
+                self.bn.append(nn.Sequential(
+                    nn.Conv2d(in_channels=residual_channels*3, out_channels=residual_channels,
+                              kernel_size=(1,1)),                    
+                    nn.BatchNorm2d(residual_channels))
+                    )
                 new_dilation *= multi_factor
                 receptive_field += additional_scope
                 additional_scope *= multi_factor
@@ -346,6 +353,38 @@ class gwnet_diff_G(nn.Module):
             nn.Conv2d(in_channels=end_channels, out_channels=end_channels*2,
                       kernel_size=(1,1)),#, bias=True),            
             )
+
+        # ## temporal transConv
+        # convTransK = 7
+        # convTransD = 7
+        # self.end_module = nn.Sequential(
+        #     nn.LeakyReLU(),
+        #     nn.ConvTranspose2d(in_channels=skip_channels, out_channels=skip_channels//2,
+        #                        kernel_size=(1,convTransK), dilation=convTransD),
+        #     nn.LeakyReLU(),
+        #     nn.ConvTranspose2d(in_channels=skip_channels//2, out_channels=residual_channels,
+        #                        kernel_size=(1,convTransK), dilation=convTransD),
+        #     nn.LeakyReLU(),
+        #     nn.ConvTranspose2d(in_channels=residual_channels, out_channels=1,
+        #                        kernel_size=(1,convTransK), dilation=convTransD),
+        #     )
+
+        # ## temporal upsample
+        # upScale = 5
+        # self.end_module = nn.Sequential(
+        #     nn.LeakyReLU(),
+        #     nn.Upsample(scale_factor=(1, upScale)),
+        #     nn.Conv2d(in_channels=skip_channels, out_channels=skip_channels//2,
+        #               kernel_size=(1,1)),#, bias=True),
+        #     nn.LeakyReLU(),
+        #     nn.Upsample(scale_factor=(1, upScale)),
+        #     nn.Conv2d(in_channels=skip_channels//2, out_channels=residual_channels,
+        #               kernel_size=(1,1)),#, bias=True),
+        #     nn.LeakyReLU(),
+        #     nn.Upsample(scale_factor=(1, upScale)),
+        #     nn.Conv2d(in_channels=residual_channels, out_channels=1,
+        #               kernel_size=(1,1)),#, bias=True),
+        #     )
 
         if (meta is None) or scatter:
             self.end_module_add = nn.Sequential(
@@ -387,7 +426,7 @@ class gwnet_diff_G(nn.Module):
                 # self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
             if scatter:
                 # J = 6 # real data
-                J = 2 # syn
+                J = 3 # syn
                 Q = 2
                 self.scattering = Scattering1D(J, out_dim, Q)   
          
@@ -513,7 +552,7 @@ class gwnet_diff_G(nn.Module):
 
     def tcn(self, filter_conv, gate_conv, skip_conv, skip):
         '''combine dilated conv + skip parts, entire tcn'''
-        def custom_forward(residual):
+        def custom_forward(residual, dummy_tensor):
             # dilated convolution
             _filter = filter_conv(residual)
             _filter = torch.tanh(_filter)
@@ -559,10 +598,10 @@ class gwnet_diff_G(nn.Module):
                                         requires_grad=True).to(self.device)
 
             else:
-                ipdb.set_trace() # fix this (one more batch size dimension)
                 m, p, n = torch.svd(aptinit)
-                initemb1 = torch.mm(m[:, :10], torch.diag(p[:10] ** 0.5))
-                initemb2 = torch.mm(torch.diag(p[:10] ** 0.5), n[:, :10].t())
+                _p = torch.diag_embed(p[:, :10] ** 0.5)
+                initemb1 = torch.bmm(m[:, :, :10], _p)
+                initemb2 = torch.bmm(_p, torch.transpose(n[:, :, :10], 1, 2))
                 nodevec1 = nn.Parameter(initemb1, requires_grad=True).to(self.device)
                 nodevec2 = nn.Parameter(initemb2, requires_grad=True).to(self.device)
 
@@ -573,7 +612,7 @@ class gwnet_diff_G(nn.Module):
             x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
         else:
             x = input
-        x = checkpoint(self.start_conv, x)
+        x = self.start_conv(x)
         skip = 0
 
         # calculate the current adaptive adj matrix once per iteration
@@ -582,7 +621,7 @@ class gwnet_diff_G(nn.Module):
             adp = F.softmax(F.relu(torch.matmul(nodevec1, nodevec2)), dim=2)
             new_supports = supports + [adp]
             del adp
-        del nodevec1, nodevec2
+            del nodevec1, nodevec2
 
         # WaveNet layers
         for i in range(self.blocks * self.layers):
@@ -605,8 +644,8 @@ class gwnet_diff_G(nn.Module):
             # skip = checkpoint(self.skip_part(self.skip_convs[i], skip), x)
 
             x, skip = checkpoint(self.tcn(self.filter_convs[i], self.gate_convs[i],
-                                self.skip_convs[i], skip), residual)
-
+                                self.skip_convs[i], skip), residual, self.dummy_tensor)
+            t_rep = x
             # # dilated convolution
             # filter = self.filter_convs[i](residual)
             # filter = torch.tanh(filter)
@@ -630,20 +669,27 @@ class gwnet_diff_G(nn.Module):
                 if self.addaptadj:
                     # x: [64, 32, 80, 15]
                     # x = self.gconv[i](x, *new_supports)
-                    x = checkpoint(self.gconv[i], x, *new_supports)
+                    x = checkpoint(self.gconv[i], x, self.dummy_tensor, *new_supports)
                 else:
                     # x = self.gconv[i](x, *supports)
-                    x = checkpoint(self.gconv[i], x, *supports)
+                    x = checkpoint(self.gconv[i], x, self.dummy_tensor, *supports)
             else:
                 # x = self.residual_convs[i](x)
-                x = checkpoint(self.residual_convs[i], x)
+                x = checkpoint(self.residual_convs[i], x, self.dummy_tensor)
 
-            x = x + residual[:, :, :, -x.size(3):]
+            # x = x + residual[:, :, :, -x.size(3):]
+            # add t representation
+            # x = x + residual[:, :, :, -x.size(3):] + t_rep
+            x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
             x = self.bn[i](x)
             # print(x.shape)
 
-        # print(skip.shape)
         # del residual, x
+        # skip: [batch_size, hidden_dim, num_nodes, 1]
+
+        # ### test: adding noise to hidden rep
+        # skip = skip + torch.normal(torch.zeros_like(skip), 0.1*skip.std()*torch.ones_like(skip))
+        # ###
         x = self.end_module(skip)
         if self.meta is None:
             
@@ -665,11 +711,17 @@ class gwnet_diff_G(nn.Module):
         else:
             # skip: [16, 256, 200, 1]
             if self.scatter:
-                x = self.end_module_add(x)
+                x = self.end_module_add(x) #[`batch_size, out_length, num_nodes, 1]         
                 x = x.transpose(1, 2)
                 x = self.end_mlp_e(x)
                 sig = x.transpose(2,3).contiguous()
-                return sig, self.scattering(sig)#[:,:,:,self.meta[0]]
+
+                # ### temporal transConv
+                # x = x[...,:self.out_dim]          
+                # x = x.transpose(1, 2)
+                # sig = self.end_mlp_e(x)
+
+                return sig, self.scattering(sig)#[:,:,:,self.meta[1]] # order0 only
 
             else:
                 x = self.coeff_conv(x)

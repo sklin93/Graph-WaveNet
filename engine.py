@@ -49,7 +49,7 @@ class trainer():
                     out_dim = seq_length
                 else:
                     # out_dim = 1890 # real data 
-                    out_dim = 5 #30 # syn
+                    out_dim = 30 # syn
 
             self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
                                gcn_bool=gcn_bool, addaptadj=addaptadj,
@@ -120,7 +120,7 @@ class trainer():
             supports = [supports[i][adj_idx] for i in range(len(supports))]
             aptinit = self.aptinit[self.state]
             if aptinit is not None:
-                aptinit = aptinit[adj_idx]
+                aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
             output = self.model(input, supports, aptinit)
         else:
@@ -176,7 +176,8 @@ class trainer():
             pass #TODO
 
         if self.scatter:
-            loss = self.loss(pred_sig, real[0].squeeze(), 0.0) + self.loss(predict, real[1].squeeze(), 0.0)
+            loss = self.loss(pred_sig, real[0].squeeze(), 0.0) + self.loss(predict, real[1].squeeze(), 0.0)\
+                    + 0.8 * self.loss(predict[...,self.meta[1],:], real[1].squeeze()[...,self.meta[1],:], 0.0)
             # loss = self.loss(pred_sig, real[0].squeeze()) + self.loss(predict, real[1].squeeze())
         else:
             real = real.squeeze()
@@ -187,17 +188,22 @@ class trainer():
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
+        # ipdb.set_trace()
+        # print(self.model.end_module_add[1].weight.grad.mean())
+        # print(self.model.start_conv.weight.grad.mean())
 
         if self.scatter:
             mae = util.masked_mae(pred_sig, real[0].squeeze(), 0.0).item()
             mape = util.masked_mape(pred_sig, real[0].squeeze(), 0.0).item()
             rmse = util.masked_rmse(pred_sig, real[0].squeeze(), 0.0).item()
+            # cc, _, _ = util.get_cc(pred_sig, real[0].squeeze())
         else:
             mae = util.masked_mae(predict,real,0.0).item()
             mape = util.masked_mape(predict,real,0.0).item()
             rmse = util.masked_rmse(predict,real,0.0).item()
 
-        return loss.item(), mae, mape, rmse
+        return loss.item(), mae, mape, rmse, \
+        self.model.start_conv.weight.grad.mean(),self.model.end_module_add[1].weight.grad.mean()#, cc
 
     def train_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None'):
         '''output p=1 sequence, then deteministically subsample/average to F and E'''
@@ -213,7 +219,7 @@ class trainer():
         supports = [supports[i][adj_idx] for i in range(len(supports))]
         aptinit = self.aptinit[self.state]
         if aptinit is not None:
-            aptinit = aptinit[adj_idx]
+            aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
         predict = self.model(input, supports, aptinit)
         
@@ -319,7 +325,7 @@ class trainer():
             supports = [supports[i][adj_idx] for i in range(len(supports))]
             aptinit = self.aptinit[self.state]
             if aptinit is not None:
-                aptinit = aptinit[adj_idx]
+                aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
             with torch.no_grad():
                 output = self.model(input, supports, aptinit)
@@ -373,7 +379,8 @@ class trainer():
             pass #TODO
 
         if self.scatter:
-            loss = self.loss(pred_sig, real[0].squeeze(), 0.0) + self.loss(predict, real[1].squeeze(), 0.0)
+            loss = self.loss(pred_sig, real[0].squeeze(), 0.0) + self.loss(predict, real[1].squeeze(), 0.0)\
+                    + 0.8 * self.loss(predict[...,self.meta[1],:], real[1].squeeze()[...,self.meta[1],:], 0.0)
             # loss = self.loss(pred_sig, real[0].squeeze()) + self.loss(predict, real[1].squeeze())
         else:
             real = real.squeeze()
@@ -384,12 +391,13 @@ class trainer():
             mae = util.masked_mae(pred_sig, real[0].squeeze(), 0.0).item()
             mape = util.masked_mape(pred_sig, real[0].squeeze(), 0.0).item()
             rmse = util.masked_rmse(pred_sig, real[0].squeeze(), 0.0).item()
+            cc, _, _ = util.get_cc(pred_sig, real[0].squeeze())
         else:
             mae = util.masked_mae(predict,real,0.0).item()
             mape = util.masked_mape(predict,real,0.0).item()
             rmse = util.masked_rmse(predict,real,0.0).item()
 
-        return loss.item(), mae, mape, rmse, pred_sig, predict
+        return loss.item(), mae, mape, rmse, cc, pred_sig, predict
 
     def eval_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None'):
         self.model.eval()
@@ -399,7 +407,7 @@ class trainer():
         supports = [supports[i][adj_idx] for i in range(len(supports))]
         aptinit = self.aptinit[self.state]
         if aptinit is not None:
-            aptinit = aptinit[adj_idx]
+            aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
         with torch.no_grad():
             predict = self.model(input, supports, aptinit)

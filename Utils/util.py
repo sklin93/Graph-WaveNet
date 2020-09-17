@@ -5,6 +5,7 @@ import scipy.sparse as sp
 import torch
 from scipy.sparse import linalg
 from scipy.signal import butter,filtfilt, zpk2sos, sosfilt
+from scipy.stats.stats import pearsonr
 from Utils import graphTools
 from Utils import dataTools
 from Utils.CRASH_loader import *
@@ -269,6 +270,8 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         return data, adj, F_t, G
     else:
         nTotal = nTrain + nValid + nTest
+
+        #### diffG
         Gs = []
         adjs = []
         F_xs = []
@@ -312,8 +315,12 @@ def load_dataset_syn(adjtype, nNodes, nTrain, nValid, nTest, num_timestep, K,
         # adjs = [mod_adj(G.W, adjtype)] * nTotal
         # F_xs = np.concatenate([_data.getSamples('train')[0],_data.getSamples('val')[0],
         #                                                     _data.getSamples('test')[0]])
-        # E_ys = np.concatenate([_data.getSamples('train')[3],_data.getSamples('val')[3],
-        #                                                     _data.getSamples('test')[3]])
+        # # # future prediction
+        # # E_ys = np.concatenate([_data.getSamples('train')[3],_data.getSamples('val')[3],
+        # #                                                     _data.getSamples('test')[3]])
+        # # same time mapping
+        # E_ys = np.concatenate([_data.getSamples('train')[1],_data.getSamples('val')[1],
+        #                                             _data.getSamples('test')[1]])
         # #####
 
         G = {}
@@ -596,7 +603,8 @@ def metric(pred, real):
     mae = masked_mae(pred,real,0.0).item()
     mape = masked_mape(pred,real,0.0).item()
     rmse = masked_rmse(pred,real,0.0).item()
-    return mae,mape,rmse
+    cc, _, _ = get_cc(pred, real)
+    return mae, mape, rmse, cc
 
 def butter_lowpass_filter(data, cutoff, fs, order=6):
     nyq = 0.5*fs
@@ -610,3 +618,21 @@ def butter_lowpass_filter(data, cutoff, fs, order=6):
     b, a = butter(order, normal_cutoff, btype='low', analog=False)
     y = filtfilt(b, a, data)
     return y
+
+def get_cc(pred, real):
+    assert pred.shape == real.shape
+    cc = []
+    p_min = 1
+    p_max = 0
+    for i in range(len(pred)):
+        cur_cc = []
+        for node_i in range(len(pred[i])):
+            r, pval = pearsonr(pred[i][node_i].detach().cpu().numpy(),real[i][node_i].detach().cpu().numpy())
+            cur_cc.append(r)
+            if pval < p_min:
+                p_min = pval
+            if pval > p_max:
+                p_max = pval
+        cc.append(sum(cur_cc)/len(cur_cc))
+    cc = sum(cc)/len(cc)
+    return cc, p_min, p_max

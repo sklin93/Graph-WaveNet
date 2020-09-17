@@ -15,7 +15,7 @@ from kymatio.numpy import Scattering1D
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
-# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 80 --data syn --blocks 2 --layers 2 --in_dim=1 --batch_size 64 --learning_rate 0.0001 --weight_decay 0.0001
+# python train.py --gcn_bool --adjtype normlap --addaptadj --num_nodes 80 --data syn --blocks 2 --layers 2 --in_dim=1 --batch_size 32 --learning_rate 0.00005 --weight_decay 0.0001 --epochs 200
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --weight_decay 0.011 --save ./garage/CRASH
 # nohup python -u train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --save ./garage/CRASH > log_CRASH 2>&1 &
 # (Notice the CRASH can handle batch size 32 on server)
@@ -59,6 +59,12 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(999)
     torch.cuda.empty_cache()
 
+def signaltonoise(a, axis=0, ddof=0):
+    a = np.asanyarray(a)
+    m = a.mean(axis)
+    sd = a.std(axis=axis, ddof=ddof)
+    return np.where(sd == 0, 0, m/sd)
+    
 def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl', 
          scatter=False, subsample=False, map=False):
     '''directly loading trained model/ generated syn data
@@ -72,7 +78,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-
+        ipdb.set_trace() # examine data
         if not scatter:
         # if True: #TODO: compare preprocessing performance difference
             # Standardize data
@@ -189,8 +195,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
         if scatter:
             # wavelet consts
-            J = 2 # or smaller
-            Q = 2 # or smaller
+            J = 3
+            Q = 2
             scattering = Scattering1D(J, args.seq_length, Q)
             meta = scattering.meta()
             order0 = np.where(meta['order'] == 0) #1*45
@@ -514,10 +520,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 # only save the best
                 if mvalid_loss < min_loss:
                     min_loss = mvalid_loss
-                    # remove previous
-                    fname = glob.glob(args.save+'_epoch_*.pth')
-                    for f in fname:
-                        os.remove(f)
+                    # # remove previous
+                    # fname = glob.glob(args.save+'_epoch_*.pth')
+                    # for f in fname:
+                    #     os.remove(f)
                     # save new
                     torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
                 # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
@@ -528,22 +534,23 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         assert len(adj_mx) == nTrain + nValid + nTest
 
         # separate adj matrices into train-val-test samples
-        adj_train = [[],[]]
+        num_adj = len(adj_mx[0]) # number of adj mx per sample
+        adj_train = [[] for i in range(num_adj)]
         for a in adj_mx[:nTrain]:
-            adj_train[0].append(a[0])
-            adj_train[1].append(a[1])
+            for adj_i in range(num_adj):
+                adj_train[adj_i].append(a[adj_i])
         adj_train = [np.stack(np.asarray(i)) for i in adj_train]
 
-        adj_val = [[],[]]
+        adj_val = [[] for i in range(num_adj)]
         for a in adj_mx[nTrain:-nTest]:
-            adj_val[0].append(a[0])
-            adj_val[1].append(a[1])
+            for adj_i in range(num_adj):
+                adj_val[adj_i].append(a[adj_i])
         adj_val = [np.stack(np.asarray(i)) for i in adj_val]
 
-        adj_test = [[],[]]
+        adj_test = [[] for i in range(num_adj)]
         for a in adj_mx[-nTest:]:
-            adj_test[0].append(a[0])
-            adj_test[1].append(a[1])
+            for adj_i in range(num_adj):
+                adj_test[adj_i].append(a[adj_i])
         adj_test = [np.stack(np.asarray(i)) for i in adj_test]
         
         print(args)
@@ -584,6 +591,9 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             train_time = []
             min_loss = float('Inf')
             lr = args.learning_rate
+
+            grad_start = []
+            grad_end = []
             for i in range(1,args.epochs+1):
                 if i % 10 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
@@ -594,6 +604,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 train_mae = []
                 train_mape = []
                 train_rmse = []
+
                 t1 = time.time()
                 # dataloader['train_loader'].shuffle() # (turned off for) overfit single batch
                 engine.set_state('train')
@@ -601,16 +612,19 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     # # overfit single batch
                     # if iter > 0:
                     #     break
+                    # ipdb.set_trace()
                     trainx = torch.Tensor(x).to(device) # [batch_size,5,80,1]
                     trainx = trainx.transpose(1, 3) # [batch_size, 1, 80, 5]
                     if scatter:
-                        trainy = scattering(y.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # order0 only
+                        trainy = scattering(y.transpose(0,3,2,1))#[...,order1[0],:] # order0 only
+                        # trainy = scattering(y.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # predict shorter
                         # # scale 
                         # trainy = ((trainy - mean)/std)
                         trainy = torch.Tensor(trainy).to(device)
 
                         sigy = torch.Tensor(y).to(device)
-                        sigy = sigy.transpose(1, 3)[...,:10]
+                        sigy = sigy.transpose(1, 3)
+                        # sigy = sigy.transpose(1, 3)[...,:10] # predict shorter
                         metrics = engine.train_syn(trainx, [sigy, trainy], G['train'], adj_idx)
                     else:
                         trainy = torch.Tensor(y).to(device)
@@ -621,10 +635,13 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     train_mae.append(metrics[1])
                     train_mape.append(metrics[2])
                     train_rmse.append(metrics[3])
+
+                    grad_start.append(metrics[-2].cpu().numpy())
+                    grad_end.append(metrics[-1].cpu().numpy())
+
                     if iter % args.print_every == 0 :
                         log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
                         print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
-
                 t2 = time.time()
                 train_time.append(t2-t1)
 
@@ -633,6 +650,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 valid_mae = []
                 valid_mape = []
                 valid_rmse = []
+                valid_cc = []
 
                 s1 = time.time()
                 engine.set_state('val')
@@ -644,13 +662,13 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     testx = torch.Tensor(x).to(device)
                     testx = testx.transpose(1, 3)
                     if scatter:
-                        testy = scattering(y.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # order0 only
+                        testy = scattering(y.transpose(0,3,2,1))#[...,order1[0],:] # order0 only
                         # # scale 
                         # testy = ((testy - mean)/std)
                         testy = torch.Tensor(testy).to(device)
 
                         sigy = torch.Tensor(y).to(device)
-                        sigy = sigy.transpose(1, 3)[...,:10]
+                        sigy = sigy.transpose(1, 3)
                         metrics = engine.eval_syn(testx, [sigy, testy], G['val'], adj_idx)
                     else:
                         testy = torch.Tensor(y).to(device)
@@ -661,6 +679,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     valid_mae.append(metrics[1])
                     valid_mape.append(metrics[2])
                     valid_rmse.append(metrics[3])
+                    valid_cc.append(metrics[4])
+
                 s2 = time.time()
                 log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
                 print(log.format(i,(s2-s1)))
@@ -674,21 +694,23 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 mvalid_mae = np.mean(valid_mae)
                 mvalid_mape = np.mean(valid_mape)
                 mvalid_rmse = np.mean(valid_rmse)
+                mvalid_cc = np.mean(valid_cc)
                 his_loss.append(mvalid_loss)
 
-                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
-                print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+                log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Valid CC: {:.4f}, Training Time: {:.4f}/epoch'
+                print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, mvalid_cc, (t2 - t1)),flush=True)
                 if mvalid_loss < min_loss:
                     min_loss = mvalid_loss
-                    # remove previous
-                    fname = glob.glob(args.save+'_epoch_*.pth')
-                    for f in fname:
-                        os.remove(f)
+                    # # remove previous
+                    # fname = glob.glob(args.save+'_epoch_*.pth')
+                    # for f in fname:
+                    #     os.remove(f)
                     # save new
-                    torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
-                # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+                    # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+                torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
+            ipdb.set_trace()
 
     else:
         scaler = dataloader['scaler']
@@ -783,10 +805,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
                 if mvalid_loss < min_loss:
                     min_loss = mvalid_loss
-                    # remove previous
-                    fname = glob.glob(args.save+'_epoch_*.pth')
-                    for f in fname:
-                        os.remove(f)
+                    # # remove previous
+                    # fname = glob.glob(args.save+'_epoch_*.pth')
+                    # for f in fname:
+                    #     os.remove(f)
                     # save new                    
                     torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
                 # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
@@ -810,6 +832,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
     amae = []
     amape = []
     armse = []
+    a_cc = []
 
     if args.data == 'CRASH':
         engine.set_state('test')
@@ -1005,13 +1028,13 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 testx = torch.Tensor(x).to(device)
                 testx = testx.transpose(1, 3)
                 if scatter:
-                    testy = scattering(y.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # order0 only
+                    testy = scattering(y.transpose(0,3,2,1))#[...,order1[0],:] # order0 only
                     # # scale 
                     # testy = ((testy - mean)/std)
                     testy = torch.Tensor(testy).to(device)
 
                     sigy = torch.Tensor(y).to(device)
-                    sigy = sigy.transpose(1, 3)[...,:10]
+                    sigy = sigy.transpose(1, 3)
                     metrics = engine.eval_syn(testx, [sigy, testy], G['val'], adj_idx)
 
                     sigs_real.append(y)
@@ -1025,27 +1048,36 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 amae.append(metrics[1])
                 amape.append(metrics[2])
                 armse.append(metrics[3])
+                a_cc.append(metrics[4])
 
                 in_Fs.append(testx)
                 reals.append(testy)
                 preds.append(metrics[-1])
-            
-                if scatter:
-                # if False:
-                    # for in-network scatter checking
-                    # ipdb.set_trace()
-                    plt.figure()
-                    plt.plot(sigs_real[0].transpose(0,3,2,1).squeeze()[1,1][...,:10], label='real')
-                    plt.plot(sigs_pred[0].cpu().numpy().squeeze()[1,1], label='pred')
-                    plt.legend()
-                    plt.savefig('sigs.png')
-                    # coeffs
-                    plt.figure()
-                    plt.plot(reals[0].cpu().numpy().squeeze()[1,1].flatten(), label='real')
-                    plt.plot(preds[0].cpu().numpy()[1,1].flatten(), label='pred')
-                    plt.legend()
-                    plt.savefig('coeff.png')
-                    ipdb.set_trace()
+                
+                if iter == 0:
+                    if scatter:
+                        # for in-network scatter checking
+                        plt.figure()
+                        # plt.plot(sigs_real[0].transpose(0,3,2,1).squeeze()[1,1][...,:10], label='real')
+                        plt.plot(sigs_real[0].transpose(0,3,2,1).squeeze()[0,0], label='real')
+                        plt.plot(sigs_pred[0].cpu().numpy().squeeze()[0,0], label='pred')
+                        plt.legend()
+                        plt.savefig('sigs.png')
+                        # coeffs
+                        plt.figure()
+                        plt.plot(reals[0].cpu().numpy().squeeze()[0,0].flatten(), label='real')
+                        plt.plot(preds[0].cpu().numpy()[0,0].flatten(), label='pred')
+                        plt.legend()
+                        plt.savefig('coeff.png')
+                        ipdb.set_trace()
+                    else:
+                        # checking the first prediction
+                        plt.figure()
+                        plt.plot(reals[0].cpu().numpy().squeeze()[1,1], label='real')
+                        plt.plot(preds[0].cpu().numpy()[1,1], label='pred')
+                        plt.legend()
+                        plt.show()
+
 
             if scatter:
                 in_Fs = torch.stack(in_Fs).cpu().numpy()
@@ -1083,11 +1115,17 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 plt.plot(ret[2][viz_node_idx, :][:3000], label='pred E')
                 plt.legend()
                 plt.show()
+                plt.figure()
+                plt.plot(ret[0][viz_node_idx, :].repeat(F_t)[:120], label='in F')
+                plt.plot(ret[1][viz_node_idx, :][:120], label='real E')
+                plt.plot(ret[2][viz_node_idx, :][:120], label='pred E')
+                plt.legend()
+                plt.show()
                 ipdb.set_trace()
 
         if model_name is None:
-            log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
-            print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
+            log = 'On average over seq_length horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}, Test CC: {:.4f}'
+            print(log.format(np.mean(amae),np.mean(amape),np.mean(armse),np.mean(a_cc)))
             torch.save(engine.model.state_dict(), args.save+"_exp"+str(args.expid)+"_best_"+str(round(his_loss[bestid],2))+".pth")
     
     else:
@@ -1126,7 +1164,7 @@ if __name__ == "__main__":
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main('garage/CRASH_wavelet_mae_epoch_5_4.02.pth',scatter=True, map=True)
     # main('garage/syn_epoch_5988_0.04.pth')
-    main(syn_file='syn_batch32_diffG.pkl', scatter=True)
-    # main(syn_file='syn_batch32_diffG.pkl')
+    main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=True)
+    # main(syn_file='syn_batch32_diffG_map.pkl')
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

@@ -9,7 +9,9 @@ matplotlib.use('TkAgg')
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D 
 
-model_dict = torch.load('garage/CRASH_avgE_best_1head.pth') #garage/CRASH_avgE_best_20.pth
+model_dict = torch.load('garage/syn_exp1_best_0.1.pth') #garage/CRASH_avgE_best_20.pth
+
+ipdb.set_trace()
 
 wts = model_dict['end_mlp_e.1.weight'].squeeze().cpu().numpy()
 # wts2 = model_dict['end_mlp_e2.1.weight'].squeeze().cpu().numpy()

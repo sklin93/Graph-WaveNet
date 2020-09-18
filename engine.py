@@ -188,7 +188,7 @@ class trainer():
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
-        # ipdb.set_trace()
+        #ipdb.set_trace()
         # print(self.model.end_module_add[1].weight.grad.mean())
         # print(self.model.start_conv.weight.grad.mean())
 
@@ -202,8 +202,8 @@ class trainer():
             mape = util.masked_mape(predict,real,0.0).item()
             rmse = util.masked_rmse(predict,real,0.0).item()
 
-        return loss.item(), mae, mape, rmse, \
-        self.model.start_conv.weight.grad.mean(),self.model.end_module_add[1].weight.grad.mean()#, cc
+        return loss.item(), mae, mape, rmse#, \
+        #self.model.start_conv.weight.grad.mean(),self.model.end_module_add[1].weight.grad.mean()#, cc
 
     def train_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None'):
         '''output p=1 sequence, then deteministically subsample/average to F and E'''
@@ -221,77 +221,92 @@ class trainer():
         if aptinit is not None:
             aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
-        predict = self.model(input, supports, aptinit)
+        output = self.model(input, supports, aptinit)
         
         if pooltype == 'None':
             if self.meta is None:
-                F = predict[0]#.transpose(1,3)
-                # E = predict[-1].transpose(1,3)
-                # E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
-                E = predict[-1].squeeze()
+                F = output[0]#.transpose(1,3)
+                # E = output[-1].transpose(1,3)
+                # E = torch.cat(output[1:],-1).mean(-1,keepdim=True).transpose(1,3)
+                E = output[-1].squeeze()
                 # E = self.scaler[1].inverse_transform(E)
             else:
                 if self.scatter:
-                    E = predict[-1].squeeze()
+                    E = output[0].squeeze()
+                    predict = output[-1].squeeze()
+
+                    # E = output[-1].squeeze()
+
                     # E[:,:,self.meta[0]] *= 1000
                     # E[:,:,self.meta[1]] *= 10000
                     # E[:,:,self.meta[2]] *= 100000
                     
-                    # TODO: inverse? transform
-                    mean = torch.Tensor(self.scaler['means'][self.meta[0]][None,...]).repeat(
-                        E.shape[0],E.shape[1],1).to(self.device) #TODO: train on order0 for now
-                    std = torch.Tensor(self.scaler['stds'][self.meta[0]][None,...]).repeat(
-                        E.shape[0],E.shape[1],1).to(self.device)
-                    # E = (E * std) + mean
-                    E = ((E - mean)/std)
+                    # # TODO: inverse? transform
+                    # mean = torch.Tensor(self.scaler['means'][self.meta[0]][None,...]).repeat(
+                    #     E.shape[0],E.shape[1],1).to(self.device) #TODO: train on order0 for now
+                    # std = torch.Tensor(self.scaler['stds'][self.meta[0]][None,...]).repeat(
+                    #     E.shape[0],E.shape[1],1).to(self.device)
+                    # # E = (E * std) + mean
+                    # E = ((E - mean)/std)
                 else:
-                    # predict = [tmp.transpose(1,3) for tmp in predict]
-                    # E = torch.cat(predict,-1)
-                    E = torch.cat(predict,-1).transpose(2,3)
+                    # output = [tmp.transpose(1,3) for tmp in output]
+                    # E = torch.cat(output,-1)
+                    E = torch.cat(output,-1).transpose(2,3)
 
         elif pooltype == 'avg':
-            predict = predict.transpose(1,3)
-            # TODO: F from predict & expand (F_t not int, cannot directly using reshape&mean)
+            output = output.transpose(1,3)
+            # TODO: F from output & expand (F_t not int, cannot directly using reshape&mean)
             # ipdb.set_trace()
-            # F = predict.reshape(*predict.shape[:-1], -1, self.F_t).mean(-1)
+            # F = output.reshape(*output.shape[:-1], -1, self.F_t).mean(-1)
             # # F shape
             # F = F.unsqueeze(-1).repeat(*[1]*len(F.shape), self.F_t)
             # F = F.view(*F.shape[:-2], -1)
             # F = self.scaler[0].inverse_transform(F)
 
-            # E from predict & expand, assign_dict the same (common EEG-brain region mapping)
+            # E from output & expand, assign_dict the same (common EEG-brain region mapping)
             E = []
             for k in range(len(assign_dict)):
-                E.append(predict[:,:,assign_dict[k],:].mean(2, keepdim=True))
+                E.append(output[:,:,assign_dict[k],:].mean(2, keepdim=True))
             E = torch.cat(E, dim=2)
             # E = self.scaler[1].inverse_transform(E)
             
-        # loss = (self.loss(F.cpu(), real_F, 0.0) + self.loss(predict.cpu(), real_E, 0.0)).to(self.device)
-        real_F = real_F.to(self.device)
-        real_E = real_E.to(self.device)
+        # loss = (self.loss(F.cpu(), real_F, 0.0) + self.loss(output.cpu(), real_E, 0.0)).to(self.device)
 
         if self.meta is None:
-            real_E = real_E.squeeze()
+            real_F = real_F.to(self.device)
+            real_E = real_E.to(self.device).squeeze()
             loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
             # loss = self.loss(E.cpu(), real_E).to(self.device)
         else:
-            # # more penalty on the first order
-            # loss = 4 * self.loss(E[:,:,self.meta[0]], real_E[:,:,self.meta[0]], 
-            #     0.0) / 7 + 2 * self.loss(E[:,:,self.meta[1]], real_E[:,:,self.meta[1]], 
-            #     0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
-            
-            # train on the first order
-            # real_E = real_E[:,:,self.meta[0]]
-            real_E = real_E.squeeze()
-            loss = self.loss(E, real_E, 0.0)
+            if self.scatter:
+                # ipdb.set_trace()
+                loss = self.loss(E, real_E[0], 0.0) + self.loss(predict, real_E[1], 0.0)#\
+                        # + 0.8 * self.loss(predict[...,self.meta[1],:], real[1].squeeze()[...,self.meta[1],:], 0.0)
+                # real_E = real_E.squeeze()
+                # loss = self.loss(E, real_E, 0.0)
+            else:
+                # more penalty on the first order
+                loss = 4 * self.loss(E[:,:,self.meta[0]], real_E[:,:,self.meta[0]], 
+                    0.0) / 7 + 2 * self.loss(E[:,:,self.meta[1]], real_E[:,:,self.meta[1]], 
+                    0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
+                
+                # train on the first order
+                # real_E = real_E[:,:,self.meta[0]]
 
         loss.backward()
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
-        mae = util.masked_mae(E,real_E,0).item()
-        mape = util.masked_mape(E,real_E,0).item()
-        rmse = util.masked_rmse(E,real_E,0).item()
+        ipdb.set_trace()
+
+        if self.scatter:
+            mae = util.masked_mae(E,real_E[0],0).item()
+            mape = util.masked_mape(E,real_E[0],0).item()
+            rmse = util.masked_rmse(E,real_E[0],0).item()
+        else:
+            mae = util.masked_mae(E,real_E,0).item()
+            mape = util.masked_mape(E,real_E,0).item()
+            rmse = util.masked_rmse(E,real_E,0).item()            
         return loss.item(), mae, mape, rmse
 
     def eval(self, input, real_val):
@@ -410,18 +425,18 @@ class trainer():
             aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
         with torch.no_grad():
-            predict = self.model(input, supports, aptinit)
+            output = self.model(input, supports, aptinit)
 
         if pooltype == 'None':
             if self.meta is None:
-                F = predict[0].transpose(1,3)
-                # E = predict[-1].transpose(1,3)
-                E = torch.cat(predict[1:],-1).mean(-1,keepdim=True).transpose(1,3)
+                F = output[0].transpose(1,3)
+                # E = output[-1].transpose(1,3)
+                E = torch.cat(output[1:],-1).mean(-1,keepdim=True).transpose(1,3)
                 # E = self.scaler[1].inverse_transform(E)
             else:
                 if self.scatter:
-                    F = predict[0] ### NOT F! just use its place to hold the output signal
-                    E = predict[-1].squeeze() ### the wavelet coefficients
+                    F = output[0] ### NOT F! just use its place to hold the output signal
+                    E = output[-1].squeeze() ### the wavelet coefficients
                     # E[:,:,self.meta[0]] *= 1000
                     # E[:,:,self.meta[1]] *= 10000
                     # E[:,:,self.meta[2]] *= 100000
@@ -435,37 +450,46 @@ class trainer():
                     E = ((E - mean)/std)
                 else:
                     F = None
-                    # predict = [tmp.transpose(1,3) for tmp in predict]
-                    # E = torch.cat(predict,-1)
-                    E = torch.cat(predict,-1).transpose(2,3)
+                    # output = [tmp.transpose(1,3) for tmp in output]
+                    # E = torch.cat(output,-1)
+                    E = torch.cat(output,-1).transpose(2,3)
                     
         if pooltype == 'avg':
-            predict = predict.transpose(1,3)
-            # E from predict & expand
+            output = output.transpose(1,3)
+            # E from output & expand
             E = []
             for k in range(len(assign_dict)):
-                E.append(predict[:,:,assign_dict[k],:].mean(2, keepdim=True))
+                E.append(output[:,:,assign_dict[k],:].mean(2, keepdim=True))
             E = torch.cat(E, dim=2)
             # E = self.scaler[1].inverse_transform(E)
         
-        real_F = real_F.to(self.device)    
-        real_E = real_E.to(self.device)
-
         if self.meta is None:
+            real_F = real_F.to(self.device)
+            real_E = real_E.to(self.device).squeeze()
             loss = self.loss(E, real_E, 0.0) #+ self.loss(F, real_F)
             # loss = self.loss(E.cpu(), real_E).to(self.device)
         else:
-            # # more penalty on the first order
-            # loss = 4 * self.loss(E[:,:,self.meta[0]], real_E[:,:,self.meta[0]], 
-            #     0.0) / 7 + 2 * self.loss(E[:,:,self.meta[1]], real_E[:,:,self.meta[1]], 
-            #     0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
-            
-            # train on the first order
-            # real_E = real_E[:,:,self.meta[0]]
-            real_E = real_E.squeeze()
-            loss = self.loss(E, real_E, 0.0)
-        
-        mae = util.masked_mae(E,real_E,0).item()
-        mape = util.masked_mape(E,real_E,0).item()
-        rmse = util.masked_rmse(E,real_E,0).item()
+            if self.scatter:
+                ipdb.set_trace()
+                loss = self.loss(E, real_E[0], 0.0) + self.loss(predict, real_E[1], 0.0)#\
+                        # + 0.8 * self.loss(predict[...,self.meta[1],:], real[1].squeeze()[...,self.meta[1],:], 0.0)
+                # real_E = real_E.squeeze()
+                # loss = self.loss(E, real_E, 0.0)
+            else:
+                # more penalty on the first order
+                loss = 4 * self.loss(E[:,:,self.meta[0]], real_E[:,:,self.meta[0]], 
+                    0.0) / 7 + 2 * self.loss(E[:,:,self.meta[1]], real_E[:,:,self.meta[1]], 
+                    0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
+                # train on the first order
+                # real_E = real_E[:,:,self.meta[0]]
+
+        if self.scatter:
+            mae = util.masked_mae(E,real_E[0],0).item()
+            mape = util.masked_mape(E,real_E[0],0).item()
+            rmse = util.masked_rmse(E,real_E[0],0).item()
+        else:
+            mae = util.masked_mae(E,real_E,0).item()
+            mape = util.masked_mape(E,real_E,0).item()
+            rmse = util.masked_rmse(E,real_E,0).item()
+
         return loss.item(), mae, mape, rmse, F, E

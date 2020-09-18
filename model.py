@@ -425,8 +425,8 @@ class gwnet_diff_G(nn.Module):
                     )
                 # self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
             if scatter:
-                # J = 6 # real data
-                J = 3 # syn
+                J = 6 # real data
+                # J = 3 # syn
                 Q = 2
                 self.scattering = Scattering1D(J, out_dim, Q)   
          
@@ -526,7 +526,7 @@ class gwnet_diff_G(nn.Module):
 
 
     def diconv(self, filter_conv, gate_conv):
-        def custom_forward(residual):
+        def custom_forward(residual, dummy_tensor):
             # dilated convolution
             filter = filter_conv(residual)
             filter = torch.tanh(filter)
@@ -538,7 +538,7 @@ class gwnet_diff_G(nn.Module):
         return custom_forward
 
     def skip_part(self, skip_conv, skip):
-        def custom_forward(s):
+        def custom_forward(s, dummy_tensor):
             # parametrized skip connection
             s = skip_conv(s)
             try:
@@ -640,12 +640,12 @@ class gwnet_diff_G(nn.Module):
             #residual = dilation_func(x, dilation, init_dilation, i)
             residual = x #[batch_size, residual_dim, 80, 16]
 
-            # x = checkpoint(self.diconv(self.filter_convs[i], self.gate_convs[i]), residual)
-            # skip = checkpoint(self.skip_part(self.skip_convs[i], skip), x)
+            x = checkpoint(self.diconv(self.filter_convs[i], self.gate_convs[i]), residual, self.dummy_tensor)
+            # skip = checkpoint(self.skip_part(self.skip_convs[i], skip), x, self.dummy_tensor)
 
-            x, skip = checkpoint(self.tcn(self.filter_convs[i], self.gate_convs[i],
-                                self.skip_convs[i], skip), residual, self.dummy_tensor)
-            t_rep = x
+            # x, skip = checkpoint(self.tcn(self.filter_convs[i], self.gate_convs[i],
+            #                     self.skip_convs[i], skip), residual, self.dummy_tensor)
+           
             # # dilated convolution
             # filter = self.filter_convs[i](residual)
             # filter = torch.tanh(filter)
@@ -656,14 +656,15 @@ class gwnet_diff_G(nn.Module):
             # del filter
             # del gate
 
-            # # parametrized skip connection
-            # s = x
-            # s = self.skip_convs[i](s)
-            # try:
-            #     skip = skip[:, :, :,  -s.size(3):]
-            # except:
-            #     skip = 0
-            # skip = s + skip
+            # parametrized skip connection
+            s = self.skip_convs[i](x)
+            try:
+                skip = skip[:, :, :,  -s.size(3):]
+            except:
+                skip = 0
+            skip = s + skip
+
+            t_rep = x
 
             if self.gcn_bool and supports is not None:
                 if self.addaptadj:

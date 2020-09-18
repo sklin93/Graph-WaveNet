@@ -78,7 +78,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-        ipdb.set_trace() # examine data
         if not scatter:
         # if True: #TODO: compare preprocessing performance difference
             # Standardize data
@@ -364,16 +363,27 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         y_E = eeg_mat[subj_id, E_idxer, :][offset:][
                                     batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     if scatter:
-                        y_E = scattering(y_E.transpose(0,2,1))  #(16, 64, 42, 45)
-                        # y_E[:,:,order0] *= 1000
-                        # y_E[:,:,order1] *= 10000
-                        # y_E[:,:,order2] *= 100000
-                        # y_E = y_E.reshape(*y_E.shape[:-2],-1) #(16, 1, 64, 1890)
-                        # y_E = torch.Tensor(y_E[:,None,...])
+                        trainy = scattering(y_E.transpose(0,2,1))#[...,order1[0],:] # order0 only
+                        # trainy = scattering(y_E.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # predict shorter
+                        # # scale 
+                        # trainy = ((trainy - mean)/std)
+                        trainy = torch.Tensor(trainy).to(device)
 
-                        # standardize coeff
-                        y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
-                        y_E = torch.Tensor(y_E)
+                        sigy = torch.Tensor(y_E).to(device)
+                        sigy = sigy.transpose(1, 2)
+                        # sigy = sigy.transpose(1, 3)[...,:10] # predict shorter
+                        metrics = engine.train_CRASH(x_F, y_F, [sigy, trainy], region_assignment, 
+                                                        [subj_id]*args.batch_size)               
+                        # y_E = scattering(y_E.transpose(0,2,1))  #(16, 64, 42, 45)
+                        # # y_E[:,:,order0] *= 1000
+                        # # y_E[:,:,order1] *= 10000
+                        # # y_E[:,:,order2] *= 100000
+                        # # y_E = y_E.reshape(*y_E.shape[:-2],-1) #(16, 1, 64, 1890)
+                        # # y_E = torch.Tensor(y_E[:,None,...])
+
+                        # # standardize coeff
+                        # y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
+                        # y_E = torch.Tensor(y_E)
 
                     else:
                         y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
@@ -388,8 +398,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                             #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
                             y_E = torch.stack(_y_E, -1)
 
-                    metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
-                                                [subj_id]*args.batch_size)
+                            metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
+                                                        [subj_id]*args.batch_size)
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])
                     train_mape.append(metrics[2])
@@ -466,17 +476,27 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
   
                         if scatter:
-                            y_E = scattering(y_E.transpose(0,2,1))
-                            # y_E[:,:,order0] *= 1000
-                            # y_E[:,:,order1] *= 10000
-                            # y_E[:,:,order2] *= 100000
+                            testy = scattering(y_E.transpose(0,2,1))#[...,order1[0],:] # order0 only
+                            # # scale 
+                            # testy = ((testy - mean)/std)
+                            testy = torch.Tensor(testy).to(device)
 
-                            # y_E = y_E.reshape(*y_E.shape[:-2],-1)
-                            # y_E = torch.Tensor(y_E[:,None,...])
+                            sigy = torch.Tensor(y).to(device)
+                            sigy = sigy.transpose(1, 2)
+                            metrics = engine.eval_CRASH(x_F, [sigy, testy], region_assignment,
+                                                            [subj_id]*args.batch_size) 
 
-                            # standardize coeff
-                            y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
-                            y_E = torch.Tensor(y_E)
+                            # y_E = scattering(y_E.transpose(0,2,1))
+                            # # y_E[:,:,order0] *= 1000
+                            # # y_E[:,:,order1] *= 10000
+                            # # y_E[:,:,order2] *= 100000
+
+                            # # y_E = y_E.reshape(*y_E.shape[:-2],-1)
+                            # # y_E = torch.Tensor(y_E[:,None,...])
+
+                            # # standardize coeff
+                            # y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
+                            # y_E = torch.Tensor(y_E)
                         
                         else:
                             y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
@@ -491,8 +511,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                                 #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
                                 y_E = torch.stack(_y_E, -1)
 
-                        metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
-                                                    [subj_id]*args.batch_size)
+                                metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
+                                                            [subj_id]*args.batch_size)
 
                         valid_loss.append(metrics[0])
                         valid_mae.append(metrics[1])
@@ -592,8 +612,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             min_loss = float('Inf')
             lr = args.learning_rate
 
-            grad_start = []
-            grad_end = []
+            # grad_start = []
+            # grad_end = []
             for i in range(1,args.epochs+1):
                 if i % 10 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
@@ -612,7 +632,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     # # overfit single batch
                     # if iter > 0:
                     #     break
-                    # ipdb.set_trace()
+                    # ipdb.set_trace() #x:(32, 5, 80, 1) y:(32, 120, 5, 1)
                     trainx = torch.Tensor(x).to(device) # [batch_size,5,80,1]
                     trainx = trainx.transpose(1, 3) # [batch_size, 1, 80, 5]
                     if scatter:
@@ -636,8 +656,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     train_mape.append(metrics[2])
                     train_rmse.append(metrics[3])
 
-                    grad_start.append(metrics[-2].cpu().numpy())
-                    grad_end.append(metrics[-1].cpu().numpy())
+                    # grad_start.append(metrics[-2].cpu().numpy())
+                    # grad_end.append(metrics[-1].cpu().numpy())
 
                     if iter % args.print_every == 0 :
                         log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
@@ -710,7 +730,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
-            ipdb.set_trace()
+            # ipdb.set_trace()
 
     else:
         scaler = dataloader['scaler']

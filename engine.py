@@ -228,12 +228,12 @@ class trainer():
                 F = output[0]#.transpose(1,3)
                 # E = output[-1].transpose(1,3)
                 # E = torch.cat(output[1:],-1).mean(-1,keepdim=True).transpose(1,3)
-                E = output[-1].squeeze()
+                E = output[1].squeeze()
                 # E = self.scaler[1].inverse_transform(E)
             else:
                 if self.scatter:
                     E = output[0].squeeze()
-                    predict = output[-1].squeeze()
+                    predict = output[1].squeeze()
 
                     # E = output[-1].squeeze()
 
@@ -297,7 +297,6 @@ class trainer():
         if self.clip is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
-        ipdb.set_trace()
 
         if self.scatter:
             mae = util.masked_mae(E,real_E[0],0).item()
@@ -307,7 +306,7 @@ class trainer():
             mae = util.masked_mae(E,real_E,0).item()
             mape = util.masked_mape(E,real_E,0).item()
             rmse = util.masked_rmse(E,real_E,0).item()            
-        return loss.item(), mae, mape, rmse
+        return loss.item(), mae, mape, rmse, self.model.skip_convs[0].weight.grad.mean()
 
     def eval(self, input, real_val):
         self.model.eval()
@@ -411,6 +410,7 @@ class trainer():
             mae = util.masked_mae(predict,real,0.0).item()
             mape = util.masked_mape(predict,real,0.0).item()
             rmse = util.masked_rmse(predict,real,0.0).item()
+            cc, _, _ = util.get_cc(pred_sig, real)
 
         return loss.item(), mae, mape, rmse, cc, pred_sig, predict
 
@@ -427,32 +427,39 @@ class trainer():
         with torch.no_grad():
             output = self.model(input, supports, aptinit)
 
+        F = None
+        E = None
+        predict = None # E's scattering coefficients
+
         if pooltype == 'None':
             if self.meta is None:
-                F = output[0].transpose(1,3)
+                F = output[0]#.transpose(1,3)
                 # E = output[-1].transpose(1,3)
-                E = torch.cat(output[1:],-1).mean(-1,keepdim=True).transpose(1,3)
+                # E = torch.cat(output[1:],-1).mean(-1,keepdim=True).transpose(1,3)
+                E = output[1].squeeze()
                 # E = self.scaler[1].inverse_transform(E)
             else:
                 if self.scatter:
-                    F = output[0] ### NOT F! just use its place to hold the output signal
-                    E = output[-1].squeeze() ### the wavelet coefficients
-                    # E[:,:,self.meta[0]] *= 1000
-                    # E[:,:,self.meta[1]] *= 10000
-                    # E[:,:,self.meta[2]] *= 100000
+                    E = output[0].squeeze()
+                    predict = output[1].squeeze()
+                    
+                    # F = output[0] ### NOT F! just use its place to hold the output signal
+                    # E = output[1].squeeze() ### the wavelet coefficients
+                    # # E[:,:,self.meta[0]] *= 1000
+                    # # E[:,:,self.meta[1]] *= 10000
+                    # # E[:,:,self.meta[2]] *= 100000
 
-                    # # TODO: inverse transform
-                    mean = torch.Tensor(self.scaler['means'][self.meta[0]][None,...]).repeat(
-                        E.shape[0],E.shape[1],1).to(self.device) #TODO: train on order0 for now
-                    std = torch.Tensor(self.scaler['stds'][self.meta[0]][None,...]).repeat(
-                        E.shape[0],E.shape[1],1).to(self.device)
-                    # E = (E * std) + mean
-                    E = ((E - mean)/std)
+                    # # # TODO: inverse transform
+                    # mean = torch.Tensor(self.scaler['means'][self.meta[0]][None,...]).repeat(
+                    #     E.shape[0],E.shape[1],1).to(self.device) #TODO: train on order0 for now
+                    # std = torch.Tensor(self.scaler['stds'][self.meta[0]][None,...]).repeat(
+                    #     E.shape[0],E.shape[1],1).to(self.device)
+                    # # E = (E * std) + mean
+                    # E = ((E - mean)/std)
                 else:
-                    F = None
                     # output = [tmp.transpose(1,3) for tmp in output]
-                    # E = torch.cat(output,-1)
-                    E = torch.cat(output,-1).transpose(2,3)
+                    # predict = torch.cat(output,-1)
+                    predict = torch.cat(output,-1).transpose(2,3)
                     
         if pooltype == 'avg':
             output = output.transpose(1,3)
@@ -470,7 +477,6 @@ class trainer():
             # loss = self.loss(E.cpu(), real_E).to(self.device)
         else:
             if self.scatter:
-                ipdb.set_trace()
                 loss = self.loss(E, real_E[0], 0.0) + self.loss(predict, real_E[1], 0.0)#\
                         # + 0.8 * self.loss(predict[...,self.meta[1],:], real[1].squeeze()[...,self.meta[1],:], 0.0)
                 # real_E = real_E.squeeze()
@@ -487,9 +493,10 @@ class trainer():
             mae = util.masked_mae(E,real_E[0],0).item()
             mape = util.masked_mape(E,real_E[0],0).item()
             rmse = util.masked_rmse(E,real_E[0],0).item()
+            cc, _, _ = util.get_cc(E, real_E[0])
         else:
             mae = util.masked_mae(E,real_E,0).item()
             mape = util.masked_mape(E,real_E,0).item()
             rmse = util.masked_rmse(E,real_E,0).item()
-
-        return loss.item(), mae, mape, rmse, F, E
+            cc, _, _ = util.get_cc(E, real_E)
+        return loss.item(), mae, mape, rmse, cc, F, E, predict

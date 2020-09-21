@@ -78,8 +78,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-        if not scatter:
-        # if True: #TODO: compare preprocessing performance difference
+        # if not scatter:
+        if True: #TODO: compare preprocessing performance difference
             # Standardize data
             num_subj, t_f, n_f = fmri_mat.shape
             _, t_e, n_e = eeg_mat.shape
@@ -290,10 +290,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         sample_per_suj = len(F_idxer) - offset
         batch_per_sub = sample_per_suj // args.batch_size
         print('Batch per subject:', batch_per_sub)
-        # ipdb.set_trace() # sample_per_suj, batch_per_sub
 
         if scatter:
-            # engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes,
             engine = trainer(coeffs_scaler, args.in_dim, args.seq_length, args.num_nodes, 
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
@@ -309,12 +307,12 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         if model_name is None or finetune is True:
             if finetune is True:
                 pretrained_dict = torch.load(model_name)
-                del pretrained_dict['end_module_add.1.weight']
-                del pretrained_dict['end_module_add.1.bias']
-                del pretrained_dict['end_mlp_e.1.weight'] 
-                del pretrained_dict['end_mlp_e.1.bias']
-                del pretrained_dict['end_mlp_f.1.weight']
-                del pretrained_dict['end_mlp_f.1.bias']
+                # del pretrained_dict['end_module_add.1.weight']
+                # del pretrained_dict['end_module_add.1.bias']
+                # del pretrained_dict['end_mlp_e.1.weight'] 
+                # del pretrained_dict['end_mlp_e.1.bias']
+                # del pretrained_dict['end_mlp_f.1.weight']
+                # del pretrained_dict['end_mlp_f.1.bias']
                 
                 model_dict = engine.model.state_dict()
                 pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
@@ -327,6 +325,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             val_time = []
             train_time = []
             min_loss = float('Inf')
+            grads = []
             for i in range(1,args.epochs+1):
                 if i % 4 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
@@ -342,7 +341,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 iter = 0
                 # cross-subject shuffle
                 train_idx = np.arange(nTrain * batch_per_sub)
-                np.random.shuffle(train_idx)
+                # np.random.shuffle(train_idx)
                 for _train_idx in train_idx:
                     subj_id = _train_idx // batch_per_sub
                     batch_i = _train_idx % batch_per_sub
@@ -362,6 +361,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         # pred future E
                         y_E = eeg_mat[subj_id, E_idxer, :][offset:][
                                     batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                                 
                     if scatter:
                         trainy = scattering(y_E.transpose(0,2,1))#[...,order1[0],:] # order0 only
                         # trainy = scattering(y_E.transpose(0,3,2,1)[...,:10])#[...,order0[0],:] # predict shorter
@@ -372,8 +372,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         sigy = torch.Tensor(y_E).to(device)
                         sigy = sigy.transpose(1, 2)
                         # sigy = sigy.transpose(1, 3)[...,:10] # predict shorter
-                        metrics = engine.train_CRASH(x_F, y_F, [sigy, trainy], region_assignment, 
-                                                        [subj_id]*args.batch_size)               
+                        y_E = [sigy, trainy]             
                         # y_E = scattering(y_E.transpose(0,2,1))  #(16, 64, 42, 45)
                         # # y_E[:,:,order0] *= 1000
                         # # y_E[:,:,order1] *= 10000
@@ -398,16 +397,18 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                             #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
                             y_E = torch.stack(_y_E, -1)
 
-                            metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
-                                                        [subj_id]*args.batch_size)
+                    metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
+                                                    [subj_id]*args.batch_size)
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])
                     train_mape.append(metrics[2])
                     train_rmse.append(metrics[3])
+                    grads.append(metrics[4])
                     if iter % args.print_every == 0 :
                         log = 'Iter: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
                         print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
                     iter += 1
+                    break
 
                 # # shuffle subject
                 # train_idx = np.arange(nTrain)
@@ -454,19 +455,29 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 valid_mae = []
                 valid_mape = []
                 valid_rmse = []
+                valid_cc = []
 
                 s1 = time.time()
-                engine.set_state('val')
+                # engine.set_state('val')
+                engine.set_state('train') # overfit single batch
                 for subj_id in range(nValid):
-                    # for F&E: nTrain + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
-                    # subj_F = scaler_F.transform(fmri_mat[nTrain + subj_id, F_idxer, :])
-                    subj_F = fmri_mat[nTrain + subj_id, F_idxer, :]
-                    # E is only for outputs
-                    # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
+                    # # for F&E: nTrain + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
+                    # # subj_F = scaler_F.transform(fmri_mat[nTrain + subj_id, F_idxer, :])
+                    # subj_F = fmri_mat[nTrain + subj_id, F_idxer, :]
+                    # # E is only for outputs
+                    # # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
+                    # if map:
+                    #     subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
+                    # else:
+                    #     subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
+                    
+                    # overfit single batch
+                    subj_F = fmri_mat[subj_id, F_idxer, :] 
                     if map:
-                        subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
+                        subj_E = eeg_mat[subj_id, E_idxer, :][:-offset]
                     else:
-                        subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
+                        subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
+
                     for batch_i in range(batch_per_sub):
                         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -481,9 +492,9 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                             # testy = ((testy - mean)/std)
                             testy = torch.Tensor(testy).to(device)
 
-                            sigy = torch.Tensor(y).to(device)
+                            sigy = torch.Tensor(y_E).to(device)
                             sigy = sigy.transpose(1, 2)
-                            metrics = engine.eval_CRASH(x_F, [sigy, testy], region_assignment,
+                            metrics = engine.eval_CRASH(x_F, y_F, [sigy, testy], region_assignment,
                                                             [subj_id]*args.batch_size) 
 
                             # y_E = scattering(y_E.transpose(0,2,1))
@@ -511,13 +522,17 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                                 #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
                                 y_E = torch.stack(_y_E, -1)
 
-                                metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
+                            metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
                                                             [subj_id]*args.batch_size)
 
                         valid_loss.append(metrics[0])
                         valid_mae.append(metrics[1])
                         valid_mape.append(metrics[2])
                         valid_rmse.append(metrics[3])
+                        valid_cc.append(metrics[4])
+
+                        break
+                    break
 
                 s2 = time.time()
                 log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
@@ -533,22 +548,24 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 mvalid_mae = np.mean(valid_mae)
                 mvalid_mape = np.mean(valid_mape)
                 mvalid_rmse = np.mean(valid_rmse)
+                mvalid_cc = np.mean(valid_cc)
                 his_loss.append(mvalid_loss)
 
-                log = 'Epoch: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
-                print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+                log = 'Epoch: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Valid CC: {:.4f}, Training Time: {:.4f}/epoch'
+                print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, mvalid_cc, (t2 - t1)),flush=True)
                 # only save the best
                 if mvalid_loss < min_loss:
                     min_loss = mvalid_loss
-                    # # remove previous
-                    # fname = glob.glob(args.save+'_epoch_*.pth')
-                    # for f in fname:
-                    #     os.remove(f)
+                    # remove previous
+                    fname = glob.glob(args.save+'_epoch_*.pth')
+                    for f in fname:
+                        os.remove(f)
                     # save new
                     torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
                 # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
+            ipdb.set_trace()
 
     elif args.data == 'syn' and not same_G: # different graph structure for each sample
         assert len(adj_mx) == nTrain + nValid + nTest
@@ -674,6 +691,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 s1 = time.time()
                 engine.set_state('val')
+                # engine.set_state('train') # overfit single batch
                 for iter, (x, y, adj_idx) in enumerate(dataloader['val_loader'].get_iterator()):
                 # # overfit single batch
                 # for iter, (x, y, adj_idx) in enumerate(dataloader['train_loader'].get_iterator()):                    
@@ -855,21 +873,32 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
     a_cc = []
 
     if args.data == 'CRASH':
-        engine.set_state('test')
+        # engine.set_state('test')
+        engine.set_state('train') # overfit single batch
         real_Fs = []
         real_Es = []
         pred_Fs = []
         pred_Es = []
+        pred_coeffs = []
         for subj_id in range(nTest):
-            # for F&E: nTrain + nValid + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
-            # subj_F = scaler_F.transform(fmri_mat[nTrain + nValid + subj_id, F_idxer, :])
-            subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
-            # E is only for outputs
-            # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
+            # # for F&E: nTrain + nValid + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
+            # # subj_F = scaler_F.transform(fmri_mat[nTrain + nValid + subj_id, F_idxer, :])
+            # subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
+            # # E is only for outputs
+            # # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
+            # if map:
+            #     subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset]
+            # else:
+            #     subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
+
+            # overfit single batch
+            ipdb.set_trace()
+            subj_F = fmri_mat[subj_id, F_idxer, :] 
             if map:
-                subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset]
+                subj_E = eeg_mat[subj_id, E_idxer, :][:-offset]
             else:
-                subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
+                subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
+
             for batch_i in range(batch_per_sub):
                 x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
@@ -878,20 +907,29 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
                 y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
 
-                if scatter:
-                    sig = y_E.transpose(0,2,1)
-                    y_E = scattering(sig)
-                    # y_E[:,:,order0] *= 1000
-                    # y_E[:,:,order1] *= 10000
-                    # y_E[:,:,order2] *= 100000
+                if scatter:                            
+                    testy = scattering(y_E.transpose(0,2,1))#[...,order1[0],:] # order0 only
+                    # # scale 
+                    # testy = ((testy - mean)/std)
+                    testy = torch.Tensor(testy).to(device)
 
-                    # y_E = y_E.reshape(*y_E.shape[:-2],-1)
-                    # y_E = torch.Tensor(y_E[:,None,...])
+                    sigy = torch.Tensor(y_E).to(device)
+                    sigy = sigy.transpose(1, 2)
+
+                    y_E = [sigy, testy]
+
+                    # sig = y_E.transpose(0,2,1)
+                    # y_E = scattering(sig)
+                    # # y_E[:,:,order0] *= 1000
+                    # # y_E[:,:,order1] *= 10000
+                    # # y_E[:,:,order2] *= 100000
+
+                    # # y_E = y_E.reshape(*y_E.shape[:-2],-1)
+                    # # y_E = torch.Tensor(y_E[:,None,...])
                     
-                    # standardize coeff
-                    y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
-                    y_E = torch.Tensor(y_E)
-
+                    # # standardize coeff
+                    # y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
+                    # y_E = torch.Tensor(y_E)
                 else:
                     y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
 
@@ -914,38 +952,36 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 real_Fs.append(y_F)
                 real_Es.append(y_E)
-                pred_Fs.append(metrics[-2])
-                pred_Es.append(metrics[-1])
+                # pred_Fs.append(metrics[-2])
+                # pred_Es.append(metrics[-1])
+                pred_Es.append(metrics[-2])
+                pred_coeffs.append(metrics[-1])
 
-                # # for checking predicted wavelet coeff
-                # plt.figure()
-                # plt.plot(real_Es[0][0,0].flatten(), label='real Es')
-                # plt.plot(pred_Es[0].cpu().numpy()[0,0].flatten(), label='pred Es')
-                # plt.legend()
-                # plt.show()
+                if batch_i == 0:
+                    if scatter:
+                        # for in-network scatter checking
+                        ipdb.set_trace()
+                        plt.figure('sig')
+                        plt.plot(real_Es[0][0].squeeze().cpu().numpy()[0,0], label='real')
+                        plt.plot(pred_Es[0].squeeze().cpu().numpy()[0,0], label='pred')
+                        plt.legend()
+                        plt.savefig('sig.png')
 
-                # # for checking prediction performance in the wavelet domain
-                # J = 6
-                # Q = 2
-                # scattering = Scattering1D(J, args.seq_length, Q)
-                # pred_s = scattering(pred_Es[0].cpu().numpy())
-                # real_s = scattering(real_Es[0])
-                # print(util.masked_mape(pred_s,real_s,0).item())
+                        plt.figure('coeff')
+                        plt.plot(real_Es[0][1].squeeze().cpu().numpy()[0,0], label='real')
+                        plt.plot(pred_coeffs[0].squeeze().cpu().numpy()[0,0], label='pred')
+                        plt.legend()
+                        plt.savefig('coeff.png')
+                        plt.show()
+                        ipdb.set_trace()   
 
-                # for in-network scatter checking
-                # ipdb.set_trace()
-                plt.figure()
-                plt.plot(sig[0,0], label='real')
-                plt.plot(pred_Fs[0].squeeze().cpu().numpy()[0,0], label='pred')
-                plt.legend()
-                plt.savefig('sig.png')
-
-                plt.figure()
-                plt.plot(real_Es[0].numpy()[1,1].flatten(), label='real')
-                plt.plot(pred_Es[0].cpu().numpy()[1,1].flatten(), label='pred')
-                plt.legend()
-                plt.savefig('coeff.png')
-                ipdb.set_trace()
+                    else:
+                        plt.figure()
+                        plt.plot(real_Es[0].squeeze().cpu().numpy()[0,0], label='real Es')
+                        plt.plot(pred_Es[0].squeeze().cpu().numpy()[0,0], label='pred Es')
+                        plt.legend()
+                        plt.show()
+                        ipdb.set_trace()
 
         real_Fs = torch.stack(real_Fs).cpu().numpy()
         real_Fs = real_Fs.reshape(-1, *real_Fs.shape[2:])
@@ -1033,6 +1069,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
         else:
             engine.set_state('test')
+            # engine.set_state('train') # overfit single batch
             in_Fs = []
             reals = []
             # pred_Fs = []
@@ -1184,7 +1221,8 @@ if __name__ == "__main__":
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main('garage/CRASH_wavelet_mae_epoch_5_4.02.pth',scatter=True, map=True)
     # main('garage/syn_epoch_5988_0.04.pth')
-    main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=True)
+    # main(syn_file='syn_batch32_diffG_map_dt.pkl')
     # main(syn_file='syn_batch32_diffG_map.pkl')
+    main('garage/CRASH_epoch_1370_0.49.pth', scatter=False, map=True, finetune=True)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

@@ -19,6 +19,8 @@ import ipdb
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --weight_decay 0.011 --save ./garage/CRASH
 # nohup python -u train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --save ./garage/CRASH > log_CRASH 2>&1 &
 # (Notice the CRASH can handle batch size 32 on server)
+##### single sample overfit
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 1 --learning_rate 0.001 --weight_decay 0 --dropout 0 --save ./garage/CRASH --epochs 8000
 ##### if using wavelet
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 8 --learning_rate 0.00001 --weight_decay 0.0001 --save ./garage/CRASH_wavelet
 ## on server
@@ -327,7 +329,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             min_loss = float('Inf')
             grads = []
             for i in range(1,args.epochs+1):
-                if i % 4 == 0:
+                if i % 500 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
                     for g in engine.optimizer.param_groups:
                         g['lr'] *= 0.9
@@ -408,44 +410,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         log = 'Iter: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
                         print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
                     iter += 1
-                    break
-
-                # # shuffle subject
-                # train_idx = np.arange(nTrain)
-                # np.random.shuffle(train_idx)
-                # for subj_id in train_idx:
-                #     # subj_F = scaler_F.transform(fmri_mat[subj_id, F_idxer, :])
-                #     subj_F = fmri_mat[subj_id, F_idxer, :]
-                #     # E is only for outputs
-                #     # subj_E =  scaler_E.transform(eeg_mat[subj_id, E_idxer, :][offset:])
-                #     subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
-                #     # shuffle batch
-                #     batch_idx = np.arange(batch_per_sub)
-                #     np.random.shuffle(batch_idx)
-                #     for batch_i in batch_idx:
-                #         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                #         # x = []
-                #         # for i in range(K):
-                #         #     rpt_t = round((i+1)*F_t) - round(i*F_t)
-                #         #     x.append(x_F[:, i:i+1, :].repeat(rpt_t, axis=1))
-                #         # x = np.concatenate(x, axis=1)
-                #         # x = torch.Tensor(x[...,None]).to(device).transpose(1, 3)
-                #         x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
-                #         y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                #         y_F = torch.Tensor(y_F[...,None]).transpose(1, 3)
-                #         y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                #         y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
-                        
-                #         metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, 
-                #                                     [subj_id]*args.batch_size)
-                #         train_loss.append(metrics[0])
-                #         train_mae.append(metrics[1])
-                #         train_mape.append(metrics[2])
-                #         train_rmse.append(metrics[3])
-                #         if iter % args.print_every == 0 :
-                #             log = 'Iter: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                #             print(log.format(iter, train_loss[-1], train_mae[-1], train_mape[-1], train_rmse[-1]),flush=True)
-                #         iter += 1
+                    break # overfit single batch
 
                 t2 = time.time()
                 train_time.append(t2-t1)
@@ -471,12 +436,13 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     # else:
                     #     subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
                     
-                    # overfit single batch
+                    ####### overfit single batch
                     subj_F = fmri_mat[subj_id, F_idxer, :] 
                     if map:
                         subj_E = eeg_mat[subj_id, E_idxer, :][:-offset]
                     else:
                         subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
+                    #######
 
                     for batch_i in range(batch_per_sub):
                         x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
@@ -494,20 +460,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                             sigy = torch.Tensor(y_E).to(device)
                             sigy = sigy.transpose(1, 2)
-                            metrics = engine.eval_CRASH(x_F, y_F, [sigy, testy], region_assignment,
-                                                            [subj_id]*args.batch_size) 
-
-                            # y_E = scattering(y_E.transpose(0,2,1))
-                            # # y_E[:,:,order0] *= 1000
-                            # # y_E[:,:,order1] *= 10000
-                            # # y_E[:,:,order2] *= 100000
-
-                            # # y_E = y_E.reshape(*y_E.shape[:-2],-1)
-                            # # y_E = torch.Tensor(y_E[:,None,...])
-
-                            # # standardize coeff
-                            # y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
-                            # y_E = torch.Tensor(y_E)
+                            y_E = [sigy, testy]
                         
                         else:
                             y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
@@ -522,8 +475,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                                 #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
                                 y_E = torch.stack(_y_E, -1)
 
-                            metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
-                                                            [subj_id]*args.batch_size)
+                        metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
+                                                        [subj_id]*args.batch_size)
 
                         valid_loss.append(metrics[0])
                         valid_mae.append(metrics[1])
@@ -531,7 +484,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         valid_rmse.append(metrics[3])
                         valid_cc.append(metrics[4])
 
-                        break
+                        break # overfit single batch
                     break
 
                 s2 = time.time()
@@ -891,13 +844,13 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             # else:
             #     subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
 
-            # overfit single batch
-            ipdb.set_trace()
+            ####### overfit single batch
             subj_F = fmri_mat[subj_id, F_idxer, :] 
             if map:
                 subj_E = eeg_mat[subj_id, E_idxer, :][:-offset]
             else:
                 subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
+            ######
 
             for batch_i in range(batch_per_sub):
                 x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
@@ -965,13 +918,13 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         plt.plot(real_Es[0][0].squeeze().cpu().numpy()[0,0], label='real')
                         plt.plot(pred_Es[0].squeeze().cpu().numpy()[0,0], label='pred')
                         plt.legend()
-                        plt.savefig('sig.png')
+                        # plt.savefig('sig.png')
 
                         plt.figure('coeff')
                         plt.plot(real_Es[0][1].squeeze().cpu().numpy()[0,0], label='real')
                         plt.plot(pred_coeffs[0].squeeze().cpu().numpy()[0,0], label='pred')
                         plt.legend()
-                        plt.savefig('coeff.png')
+                        # plt.savefig('coeff.png')
                         plt.show()
                         ipdb.set_trace()   
 
@@ -1223,6 +1176,6 @@ if __name__ == "__main__":
     # main('garage/syn_epoch_5988_0.04.pth')
     # main(syn_file='syn_batch32_diffG_map_dt.pkl')
     # main(syn_file='syn_batch32_diffG_map.pkl')
-    main('garage/CRASH_epoch_1370_0.49.pth', scatter=False, map=True, finetune=True)
+    main('garage/CRASH_epoch_7191_0.0.pth',scatter=False, map=True, finetune=False)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

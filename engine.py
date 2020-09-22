@@ -306,7 +306,7 @@ class trainer():
             mae = util.masked_mae(E,real_E,0).item()
             mape = util.masked_mape(E,real_E,0).item()
             rmse = util.masked_rmse(E,real_E,0).item()            
-        return loss.item(), mae, mape, rmse, self.model.skip_convs[0].weight.grad.mean()
+        return loss.item(), mae, mape, rmse, self.model.end_mlp_e[1].weight.grad.mean()#self.model.skip_convs[0].weight.grad.mean()
 
     def eval(self, input, real_val):
         self.model.eval()
@@ -477,6 +477,8 @@ class trainer():
             # loss = self.loss(E.cpu(), real_E).to(self.device)
         else:
             if self.scatter:
+                real_E[0] = real_E[0].squeeze()
+                real_E[1] = real_E[1].squeeze()
                 loss = self.loss(E, real_E[0], 0.0) + self.loss(predict, real_E[1], 0.0)#\
                         # + 0.8 * self.loss(predict[...,self.meta[1],:], real[1].squeeze()[...,self.meta[1],:], 0.0)
                 # real_E = real_E.squeeze()

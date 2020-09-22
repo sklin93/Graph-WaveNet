@@ -621,6 +621,9 @@ def butter_lowpass_filter(data, cutoff, fs, order=6):
 
 def get_cc(pred, real):
     assert pred.shape == real.shape
+    if len(pred.shape) == 2: # batch 1 case
+        pred = pred[None,...]
+        real = real[None,...]
     cc = []
     p_min = 1
     p_max = 0

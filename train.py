@@ -26,7 +26,8 @@ import ipdb
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 8 --learning_rate 0.00001 --weight_decay 0.0001 --save ./garage/CRASH_wavelet
 ## on server
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 8 --learning_rate 0.0001 --weight_decay 0.0001 --device 'cuda:2' --save ./garage/CRASH_wavelet_mae
-#####
+##### F only
+# python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 8736 --in_dim 1 --blocks 2 --layers 2 --batch_size 8 --learning_rate 3e-4 --dropout 0.2 --save ./garage/CRASH --epochs 5 --kernel_size 3 --nhid 16
 parser = argparse.ArgumentParser()
 parser.add_argument('--device',type=str,default='cuda:0',help='')
 parser.add_argument('--data',type=str,default='data/METR-LA',help='data path')
@@ -350,14 +351,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
                              args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
-                             meta=[order0[0],order1[0],order2[0]],scatter=True, F_only=F_only)
+                             meta=[order0[0],order1[0],order2[0]],scatter=True, F_only=F_only, 
+                             batch_size=args.batch_size)
         else:
             engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
             # engine = trainer([scaler_F,scaler_E], args.in_dim, 1000, args.num_nodes, # predict shorter
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
                              args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
-                             subsample=subsample, F_only=F_only)
+                             subsample=subsample, F_only=F_only, batch_size=args.batch_size)
 
         if model_name is None or finetune is True:
             if finetune is True:
@@ -551,8 +553,12 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                                     #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
                                     y_E = torch.stack(_y_E, -1)
 
-                        metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
-                                                        [subj_id]*args.batch_size)
+                        if subj_id == 0 and batch_i == 0: # only viz the first one
+                            metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
+                                                        [subj_id]*args.batch_size, viz=True)
+                        else:
+                            metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
+                                                        [subj_id]*args.batch_size)                            
 
                         valid_loss.append(metrics[0])
                         valid_mae.append(metrics[1])
@@ -597,8 +603,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
             # ipdb.set_trace() #tmp1 = [i[0] for i in grads]
-
-            
 
     elif args.data == 'syn' and not same_G: # different graph structure for each sample
         assert len(adj_mx) == nTrain + nValid + nTest
@@ -744,7 +748,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     else:
                         testy = torch.Tensor(y).to(device)
                         testy = testy.transpose(1, 3)
-                        metrics = engine.eval_syn(testx, testy, G['val'], adj_idx)
+                        if (i % 30 == 0) and iter == 0:
+                            metrics = engine.eval_syn(testx, testy, G['val'], adj_idx, viz=True)
+                        else:
+                            metrics = engine.eval_syn(testx, testy, G['val'], adj_idx)
 
                     valid_loss.append(metrics[0])
                     valid_mae.append(metrics[1])
@@ -1264,7 +1271,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 if __name__ == "__main__":
     t1 = time.time()
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
-    # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=True)
+    # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
     main(scatter=False, map=True, F_only=True)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

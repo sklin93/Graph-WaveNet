@@ -6,6 +6,7 @@ from torch.autograd import Variable
 from torch.utils.checkpoint import checkpoint
 from kymatio.torch import Scattering1D
 import sys
+import matplotlib.pyplot as plt
 import ipdb
 
 class nconv(nn.Module):
@@ -588,7 +589,7 @@ class gwnet_diff_G(nn.Module):
             return x
         return custom_forward
 
-    def forward(self, input, supports=None, aptinit=None):
+    def forward(self, input, supports=None, aptinit=None, viz=False):
         # inputs: [batch_size, 1, num_nodes, in_len+1], supports: len 2, each (batch_size, num_nodes, num_nodes)
         ### deal with supports
         batch_size = len(input)
@@ -702,6 +703,11 @@ class gwnet_diff_G(nn.Module):
         # skip = skip + torch.normal(torch.zeros_like(skip), 0.1*skip.std()*torch.ones_like(skip))
         # ###
         x = self.end_module(skip)
+        if viz:
+            print(x.shape)
+            for j in range(10):
+                plt.plot(x.detach().cpu().numpy()[0,:,j,0])
+            plt.show()
         if self.meta is None:
             
             ### F prediction
@@ -756,9 +762,8 @@ class gwnet_diff_G(nn.Module):
 
 
 class gwnet_diff_G_Fonly(nn.Module):
-    def __init__(self, device, num_nodes, dropout=0.3, supports_len=0,
-                gcn_bool=True, addaptadj=True,
-                in_dim=2, out_dim=12, out_dim_f=5,
+    def __init__(self, device, num_nodes, dropout=0.3, supports_len=0, batch_size=32,
+                gcn_bool=True, addaptadj=True, in_dim=2, out_dim=12, out_dim_f=5,
                 residual_channels=32, dilation_channels=32, skip_channels=256,
                 end_channels=512, kernel_size=2, blocks=4, layers=2,
                 out_nodes=64, meta=None, scatter=False):
@@ -781,6 +786,26 @@ class gwnet_diff_G_Fonly(nn.Module):
         self.bn = nn.ModuleList()
         self.gconv = nn.ModuleList()
         self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)
+        
+        if self.gcn_bool and self.addaptadj:
+            '''If different samples have different supports, theres no way to 
+            init nodevec using supports info...'''
+            # if aptinit is None:
+            self.nodevec1 = nn.Parameter(torch.randn(batch_size, 
+                                    self.num_nodes, 10).to(self.device), 
+                                    requires_grad=True).to(self.device)
+            self.nodevec2 = nn.Parameter(torch.randn(batch_size, 
+                                    10, self.num_nodes).to(self.device), 
+                                    requires_grad=True).to(self.device)
+
+            # else:
+            #     ipdb.set_trace()
+            #     m, p, n = torch.svd(aptinit)
+            #     _p = torch.diag_embed(p[:, :10] ** 0.5)
+            #     initemb1 = torch.bmm(m[:, :, :10], _p)
+            #     initemb2 = torch.bmm(_p, torch.transpose(n[:, :, :10], 1, 2))
+            #     self.nodevec1 = nn.Parameter(initemb1, requires_grad=True).to(self.device)
+            #     self.nodevec2 = nn.Parameter(initemb2, requires_grad=True).to(self.device)
 
         self.start_conv = nn.Conv2d(in_channels=in_dim,
                                     out_channels=residual_channels,
@@ -817,7 +842,7 @@ class gwnet_diff_G_Fonly(nn.Module):
                                                  kernel_size=(1, 1)))
                 # self.bn.append(nn.BatchNorm2d(residual_channels))
                 self.bn.append(nn.Sequential(
-                    nn.Conv2d(in_channels=residual_channels*3, out_channels=residual_channels,
+                    nn.Conv2d(in_channels=residual_channels, out_channels=residual_channels,
                               kernel_size=(1,1)),                    
                     # nn.BatchNorm2d(residual_channels)
                     ))
@@ -829,16 +854,16 @@ class gwnet_diff_G_Fonly(nn.Module):
                                                               support_len=supports_len))
 
         self.end_module = nn.Sequential(
-                # nn.Tanh(), 
-                nn.LeakyReLU(),
+                nn.Tanh(), 
+                # nn.LeakyReLU(),
                 # nn.ReLU(),
                 nn.Conv2d(in_channels=skip_channels, out_channels=end_channels,
                           kernel_size=(1,1), bias=True)
                 )     
 
         self.end_mlp_f = nn.Sequential(
-            # nn.Tanh(),
-            nn.LeakyReLU(), 
+            nn.Tanh(),
+            # nn.LeakyReLU(), 
             # nn.ReLU(),
             nn.Conv2d(in_channels=end_channels, out_channels=out_dim_f,
                       kernel_size=(1,1), bias=True)
@@ -852,87 +877,11 @@ class gwnet_diff_G_Fonly(nn.Module):
         self.receptive_field = receptive_field
         self.meta = meta
 
-
-    def diconv(self, filter_conv, gate_conv):
-        def custom_forward(residual, dummy_tensor):
-            # dilated convolution
-            filter = filter_conv(residual)
-            filter = torch.tanh(filter)
-            gate = gate_conv(residual)
-            gate = torch.sigmoid(gate)
-            x = filter * gate
-
-            return x
-        return custom_forward
-
-    def skip_part(self, skip_conv, skip):
-        def custom_forward(s, dummy_tensor):
-            # parametrized skip connection
-            s = skip_conv(s)
-            try:
-                skip = skip[:, :, :,  -s.size(3):]
-            except:
-                skip = 0
-            skip = s + skip
-
-            return skip
-        return custom_forward
-
-    def tcn(self, filter_conv, gate_conv, skip_conv, skip):
-        '''combine dilated conv + skip parts, entire tcn'''
-        def custom_forward(residual, dummy_tensor):
-            # dilated convolution
-            _filter = filter_conv(residual)
-            _filter = torch.tanh(_filter)
-            gate = gate_conv(residual)
-            gate = torch.sigmoid(gate)
-            x = _filter * gate
-            # del _filter
-            # del _gate
-
-            # parametrized skip connection
-            s = x
-            s = skip_conv(s)
-            try:
-                skip = skip[:, :, :,  -s.size(3):]
-            except:
-                skip = 0
-            skip = s + skip
-
-            return x, skip
-        return custom_forward            
-
-    def endconv(self, end_conv_1, end_conv_2):
-        def custom_forward(x):
-            x = F.relu(x)
-            x = F.relu(end_conv_1(x))
-            x = end_conv_2(x)
-            return x
-        return custom_forward
-
-    def forward(self, input, supports=None, aptinit=None):
+    def forward(self, input, supports=None, aptinit=None, viz=False):
         # inputs: [batch_size, 1, num_nodes, in_len+1], supports: len 2, each (batch_size, num_nodes, num_nodes)
-        ### deal with supports
-        batch_size = len(input)
         if self.gcn_bool and self.addaptadj:
             if supports is None:
-                    supports = []
-            if aptinit is None:
-                nodevec1 = nn.Parameter(torch.randn(batch_size, 
-                                        self.num_nodes, 10).to(self.device), 
-                                        requires_grad=True).to(self.device)
-                nodevec2 = nn.Parameter(torch.randn(batch_size, 
-                                        10, self.num_nodes).to(self.device), 
-                                        requires_grad=True).to(self.device)
-
-            else:
-                m, p, n = torch.svd(aptinit)
-                _p = torch.diag_embed(p[:, :10] ** 0.5)
-                initemb1 = torch.bmm(m[:, :, :10], _p)
-                initemb2 = torch.bmm(_p, torch.transpose(n[:, :, :10], 1, 2))
-                nodevec1 = nn.Parameter(initemb1, requires_grad=True).to(self.device)
-                nodevec2 = nn.Parameter(initemb2, requires_grad=True).to(self.device)
-
+                supports = []
         ### normal forward
         # print(self.receptive_field)
         in_len = input.size(3)
@@ -946,16 +895,19 @@ class gwnet_diff_G_Fonly(nn.Module):
         # calculate the current adaptive adj matrix once per iteration
         new_supports = None
         if self.gcn_bool and self.addaptadj:
-            adp = F.softmax(F.relu(torch.matmul(nodevec1, nodevec2)), dim=2)
+            adp = F.softmax(F.relu(torch.matmul(self.nodevec1, self.nodevec2)), dim=2)
+            if viz:
+                ipdb.set_trace()
+                plt.imshow(adp[0].detach().cpu().numpy())
+                plt.show()
             if len(supports) > 0:
                 new_supports = supports + [adp]
             else:
                 new_supports = [adp]
             del adp
-            del nodevec1, nodevec2
 
         # WaveNet layers
-        for i in range(self.blocks * self.layers):
+        for i in range(self.blocks * self.layers):       
             # print(i, x.shape)
             #            |----------------------------------------|     *residual*
             #            |                                        |
@@ -971,21 +923,18 @@ class gwnet_diff_G_Fonly(nn.Module):
             #residual = dilation_func(x, dilation, init_dilation, i)
             residual = x #[batch_size, residual_dim, 80, 16]
 
-            x = checkpoint(self.diconv(self.filter_convs[i], self.gate_convs[i]), residual, self.dummy_tensor)
+            # x = checkpoint(self.diconv(self.filter_convs[i], self.gate_convs[i]), residual, self.dummy_tensor)
             # skip = checkpoint(self.skip_part(self.skip_convs[i], skip), x, self.dummy_tensor)
 
             # x, skip = checkpoint(self.tcn(self.filter_convs[i], self.gate_convs[i],
             #                     self.skip_convs[i], skip), residual, self.dummy_tensor)
            
-            # # dilated convolution
-            # filter = self.filter_convs[i](residual)
-            # filter = torch.tanh(filter)
-            # gate = self.gate_convs[i](residual)
-            # gate = torch.sigmoid(gate)
-            # x = filter * gate
-
-            # del filter
-            # del gate
+            # dilated convolution
+            filter = self.filter_convs[i](residual)
+            filter = torch.tanh(filter)
+            gate = self.gate_convs[i](residual)
+            gate = torch.sigmoid(gate)
+            x = filter * gate
 
             # parametrized skip connection
             s = self.skip_convs[i](x)
@@ -1000,27 +949,29 @@ class gwnet_diff_G_Fonly(nn.Module):
             if self.gcn_bool:
                 if self.addaptadj:
                     # x: [64, 32, 80, 15]
-                    # x = self.gconv[i](x, *new_supports)
-                    x = checkpoint(self.gconv[i], x, self.dummy_tensor, *new_supports)
+                    x = self.gconv[i](x, self.dummy_tensor, *new_supports)
+                    # x = checkpoint(self.gconv[i], x, self.dummy_tensor, *new_supports)
                 else:
                     assert supports is not None
-                    # x = self.gconv[i](x, *supports)
-                    x = checkpoint(self.gconv[i], x, self.dummy_tensor, *supports)
+                    x = self.gconv[i](x, self.dummy_tensor, *supports)
+                    # x = checkpoint(self.gconv[i], x, self.dummy_tensor, *supports)
             else:
-                # x = self.residual_convs[i](x)
-                x = checkpoint(self.residual_convs[i], x, self.dummy_tensor)
+                x = self.residual_convs[i](x, self.dummy_tensor)
+                # x = checkpoint(self.residual_convs[i], x, self.dummy_tensor)
 
-            # x = x + residual[:, :, :, -x.size(3):]
+            x = x + residual[:, :, :, -x.size(3):]
             # add t representation
-            # x = x + residual[:, :, :, -x.size(3):] + t_rep
-            x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
-            x = self.bn[i](x)
-            # print(x.shape)
+            # x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
 
-        x = self.end_module(skip)
+            x = self.bn[i](x) #torch.Size([8, 32, 200, 15])
+
+        # print(skip.shape)
+        # for j in range(10):
+        #     plt.plot(skip.detach().cpu().numpy()[0,:,j,0])
+        # plt.show()
+        x = self.end_module(skip)    
         x_f = self.end_mlp_f(x).transpose(1,3)
-        # print(x_f.shape)
-        # ipdb.set_trace()
+
         if self.meta is None:
             return x_f
 

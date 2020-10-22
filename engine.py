@@ -44,7 +44,7 @@ class trainer():
                 dropout, lrate, wdecay, device, supports, gcn_bool,
                 addaptadj, aptinit, kernel_size, blocks, layers, 
                 out_nodes=None, F_t=None, meta=None, subsample=False, 
-                scatter=False, F_only=False):
+                scatter=False, F_only=False, batch_size=None):
         '''
         - F_t is the time interval between each F (input signals) using E (output) as the scale
         - subsample controls whether output E is subsampled to the same temporal resolution as input F
@@ -75,7 +75,7 @@ class trainer():
                     out_dim = 30 # syn
 
             if F_only:
-                self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, supports_len,
+                self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, supports_len, batch_size,
                                    gcn_bool=gcn_bool, addaptadj=addaptadj,
                                    in_dim=in_dim, out_dim=out_dim, out_dim_f=out_dim_f,
                                    residual_channels=nhid, dilation_channels=nhid, 
@@ -117,8 +117,8 @@ class trainer():
         # self.optimizer = torch.optim.SGD(self.model.parameters(), lr=lrate, weight_decay=wdecay)
         # self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lrate, weight_decay=wdecay)
         # self.loss = util.masked_mae #util.masked_mse
-        # self.loss = nn.L1Loss()
-        self.loss = nn.MSELoss() # MSELoss
+        self.loss = nn.L1Loss()
+        # self.loss = nn.MSELoss() # MSELoss
         # self.loss = nn.SmoothL1Loss() # HuberLoss
         # self.loss = nn.CosineEmbeddingLoss()
         self.loss2 = Regress_Loss_1()
@@ -332,10 +332,10 @@ class trainer():
         if self.meta is None:
             real_F = real_F.to(self.device).squeeze()
             if self.F_only:
-                plt.plot(F[0,0].detach().cpu().numpy())
-                plt.plot(F[0,1].detach().cpu().numpy())
-                plt.show()
-                loss = self.loss(F, real_F) + self.loss2(F, real_F)
+                # plt.plot(F[0,0].detach().cpu().numpy())
+                # plt.plot(F[0,1].detach().cpu().numpy())
+                # plt.show()
+                loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()
                 # plt.plot(E[0,0].detach().cpu().numpy())
@@ -402,7 +402,7 @@ class trainer():
         rmse = util.masked_rmse(predict,real,0.0).item()
         return loss.item(), mae, mape, rmse
 
-    def eval_syn(self, input, real, G, adj_idx=None, pooltype='None'):
+    def eval_syn(self, input, real, G, adj_idx=None, pooltype='None', viz=False):
         same_G = (type(G) != list)
         self.model.eval()
         # input = input[:,:1,:,:]
@@ -422,7 +422,7 @@ class trainer():
                 aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
             with torch.no_grad():
-                output = self.model(input, supports, aptinit)
+                output = self.model(input, supports, aptinit, viz=viz)
                 # output = self.model(input) # validate SC
 
         pred_sig = None
@@ -479,6 +479,15 @@ class trainer():
             # loss = self.loss(pred_sig, real[0].squeeze()) + self.loss(predict, real[1].squeeze())
         else:
             real = real.squeeze()
+            if viz:
+                print(predict.shape)
+                plt.figure()
+                for j in range(5):
+                    plt.plot(predict.detach().cpu().numpy()[0,j,:])
+                plt.figure()
+                for j in range(5):
+                    plt.plot(real.detach().cpu().numpy()[0,j,:])
+                plt.show()         
             loss = self.loss(predict, real, 0.0)
             # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
         
@@ -495,7 +504,7 @@ class trainer():
 
         return loss.item(), mae, mape, rmse, cc, pred_sig, predict
 
-    def eval_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None'):
+    def eval_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None', viz=False):
         self.model.eval()
         # input = nn.functional.pad(input,(1,0,0,0))
 
@@ -506,7 +515,7 @@ class trainer():
             aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
         with torch.no_grad():
-            output = self.model(input, supports, aptinit)
+            output = self.model(input, supports, aptinit, viz=viz)
             # output = self.model(input) # validate SC
 
         F = None
@@ -541,7 +550,7 @@ class trainer():
         if self.meta is None:
             real_F = real_F.to(self.device).squeeze()
             if self.F_only:
-                loss = self.loss(F, real_F) + self.loss2(F, real_F)
+                loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()
                 # condition = Variable(torch.ones(1, 1), requires_grad=False).to(self.device) # for CosineEmbeddingLoss

@@ -32,7 +32,8 @@ class Regress_Loss_1(torch.nn.Module):
 
 def init_weights(m):
     if type(m) == nn.Linear or type(m) == nn.Conv2d:
-        torch.nn.init.xavier_uniform_(m.weight)
+        torch.nn.init.kaiming_uniform(m.weight)
+        # torch.nn.init.xavier_uniform_(m.weight)
         # m.weight.data.fill_(0.01)
         m.bias.data.fill_(0.01)
     elif type(m) == nn.Sequential or type(m) == nn.ModuleList:
@@ -79,7 +80,7 @@ class trainer():
                                    gcn_bool=gcn_bool, addaptadj=addaptadj,
                                    in_dim=in_dim, out_dim=out_dim, out_dim_f=out_dim_f,
                                    residual_channels=nhid, dilation_channels=nhid, 
-                                   skip_channels=128, end_channels=256,
+                                   skip_channels=nhid*8, end_channels=nhid*16,
                                    kernel_size=kernel_size, blocks=blocks, layers=layers, 
                                    out_nodes=out_nodes, meta=meta,
                                    scatter=scatter)
@@ -106,10 +107,9 @@ class trainer():
         else:
             self.model = gwnet(device, num_nodes, dropout, supports=supports, 
                                gcn_bool=gcn_bool, addaptadj=addaptadj, aptinit=aptinit, 
-                               in_dim=in_dim, out_dim=seq_length, residual_channels=nhid, 
+                               in_dim=in_dim, out_dim=int(seq_length//F_t), residual_channels=nhid, 
                                dilation_channels=nhid, skip_channels=nhid*8, end_channels=nhid*16,
                                kernel_size=kernel_size, blocks=blocks, layers=layers)
-        
         # self.model.apply(init_weights)
         self.model.to(device)
         print(self.model)
@@ -259,6 +259,8 @@ class trainer():
         return loss.item(), mae, mape, rmse#, \
         #self.model.start_conv.weight.grad.mean(),self.model.end_module_add[1].weight.grad.mean()#, cc
 
+    # """
+    ### diffG 
     def train_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None'):
         '''output p=1 sequence, then deteministically subsample/average to F and E'''
 
@@ -270,7 +272,7 @@ class trainer():
         assert self.state is not None, 'set train/val/test state first'
 
         supports = self.state_supports
-        supports = [supports[i][adj_idx] for i in range(len(supports))]
+        supports = [s[adj_idx] for s in supports]
         aptinit = self.aptinit[self.state]
         if aptinit is not None:
             aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
@@ -383,11 +385,96 @@ class trainer():
                 mae = util.masked_mae(E,real_E,0).item()
                 mape = util.masked_mape(E,real_E,0).item()
                 rmse = util.masked_rmse(E,real_E,0).item()                
-        return loss.item(), mae, mape, rmse#, \
-        # [self.model.end_mlp_e[1].weight.grad.mean(), self.model.end_module[1].weight.grad.mean(),
-        #  self.model.gconv[1].mlp.mlp.weight.grad.mean(), self.model.skip_convs[0].weight.grad.mean(), 
-        #  self.model.filter_convs[1].weight.grad.mean(), self.model.start_conv.weight.grad.mean()]
+        # ipdb.set_trace()
+        return loss.item(), mae, mape, rmse, #\
+        [abs(self.model.end_module[1].weight.grad).mean(), #abs(self.model.end_mlp_e[1].weight.grad).mean(), 
+         abs(self.model.gconv[1].mlp.mlp.weight.grad).mean(), abs(self.model.skip_convs[0].weight.grad).mean(), 
+         abs(self.model.filter_convs[1].weight.grad).mean(), abs(self.model.start_conv.weight.grad).mean()]
+    
+    
+    ### sameG debugging purpose
+    def train_CRASH2(self, input, real_F, real_E):
+        '''output p=1 sequence, then deteministically subsample/average to F and E'''
 
+        # self.model = torch.nn.DataParallel(self.model, device_ids=[0, 1])
+        self.model.train()
+        self.optimizer.zero_grad()
+        # input = nn.functional.pad(input,(1,0,0,0))
+        output = self.model(input)
+        # output = self.model(input) # validate SC
+
+        if self.F_only:
+            F = output.squeeze()
+        else:
+            if self.meta is None:
+                F = output[0].squeeze()
+                E = output[1].squeeze()
+            else:
+                E = output[0].squeeze()
+                predict = output[1].squeeze()
+
+        ##### loss #####
+        if self.meta is None:
+            real_F = real_F.to(self.device).squeeze()
+            if self.F_only:
+                # plt.plot(F[0,0].detach().cpu().numpy())
+                # plt.plot(F[0,1].detach().cpu().numpy())
+                # plt.show()
+                loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
+            else:
+                real_E = real_E.to(self.device).squeeze()
+                # plt.plot(E[0,0].detach().cpu().numpy())
+                # plt.plot(E[0,1].detach().cpu().numpy())
+                # plt.show()
+                # condition = Variable(torch.ones(1, 1), requires_grad=False).to(self.device) # for CosineEmbeddingLoss
+                loss = self.loss(E, real_E) #+ self.loss(F, real_F)
+
+        else:
+            if self.scatter:
+                # ipdb.set_trace()
+                # loss = self.loss(E, real_E[0], 0.0) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:], 0.0)\
+                        # + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:], 0.0)
+                loss = 0.5*self.loss(E, real_E[0]) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
+                        + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])\
+                       + 0.5*self.loss2(E, real_E[0]) + self.loss2(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
+                        + 0.5 * self.loss2(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])
+                # real_E = real_E.squeeze()
+                # loss = self.loss(E, real_E, 0.0)
+            else:
+                # more penalty on the first order
+                loss = 4 * self.loss(E[:,:,self.meta[0]], real_E[:,:,self.meta[0]], 
+                    0.0) / 7 + 2 * self.loss(E[:,:,self.meta[1]], real_E[:,:,self.meta[1]], 
+                    0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
+                
+                # train on the first order
+                # real_E = real_E[:,:,self.meta[0]]
+        #########################
+
+        loss.backward()
+        if self.clip is not None:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
+        self.optimizer.step()
+
+        if self.scatter:
+            mae = util.masked_mae(E,real_E[0],0).item()
+            mape = util.masked_mape(E,real_E[0],0).item()
+            rmse = util.masked_rmse(E,real_E[0],0).item()
+        else:
+            if self.F_only:      
+                mae = util.masked_mae(F,real_F,0).item()
+                mape = util.masked_mape(F,real_F,0).item()
+                rmse = util.masked_rmse(F,real_F,0).item()
+            else:
+                mae = util.masked_mae(E,real_E,0).item()
+                mape = util.masked_mape(E,real_E,0).item()
+                rmse = util.masked_rmse(E,real_E,0).item()                
+        # ipdb.set_trace()
+        return loss.item(), mae, mape, rmse, \
+        [abs(self.model.end_conv_1.weight.grad).mean(), #abs(self.model.end_mlp_e[1].weight.grad).mean(), 
+         abs(self.model.gconv[1].mlp.mlp.weight.grad).mean(), abs(self.model.skip_convs[0].weight.grad).mean(), 
+         abs(self.model.filter_convs[1].weight.grad).mean(), abs(self.model.start_conv.weight.grad).mean()]
+    
+    
     def eval(self, input, real_val):
         self.model.eval()
         input = nn.functional.pad(input,(1,0,0,0))
@@ -416,7 +503,7 @@ class trainer():
             assert adj_idx is not None, 'adj index needed.'
 
             supports = self.state_supports
-            supports = [supports[i][adj_idx] for i in range(len(supports))]
+            supports = [s[adj_idx] for s in supports]
             aptinit = self.aptinit[self.state]
             if aptinit is not None:
                 aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
@@ -504,12 +591,13 @@ class trainer():
 
         return loss.item(), mae, mape, rmse, cc, pred_sig, predict
 
+    # """
     def eval_CRASH(self, input, real_F, real_E, assign_dict, adj_idx, pooltype='None', viz=False):
         self.model.eval()
         # input = nn.functional.pad(input,(1,0,0,0))
 
         supports = self.state_supports
-        supports = [supports[i][adj_idx] for i in range(len(supports))]
+        supports = [s[adj_idx] for s in supports]
         aptinit = self.aptinit[self.state]
         if aptinit is not None:
             aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
@@ -549,6 +637,14 @@ class trainer():
         ##### loss #####
         if self.meta is None:
             real_F = real_F.to(self.device).squeeze()
+            if viz:
+                plt.figure('pred')
+                for j in range(10):
+                    plt.plot(F[0,:,j].cpu().numpy())
+                plt.figure('gt')
+                for j in range(10):
+                    plt.plot(real_F[0,:,j].cpu().numpy())
+                plt.show()            
             if self.F_only:
                 loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
             else:
@@ -591,3 +687,87 @@ class trainer():
                 rmse = util.masked_rmse(E,real_E,0).item()
                 cc, _, _ = util.get_cc(E, real_E)
         return loss.item(), mae, mape, rmse, cc, F, E, predict
+    
+    
+    ### sameG debugging purpose
+    def eval_CRASH2(self, input, real_F, real_E, viz=False):
+        self.model.eval()
+        # input = nn.functional.pad(input,(1,0,0,0))
+
+        with torch.no_grad():
+            output = self.model(input)
+            # output = self.model(input) # validate SC
+
+        F = None
+        E = None
+        predict = None # E's scattering coefficients
+
+        if self.F_only:
+            F = output.squeeze()
+        else:
+            if self.meta is None:
+                F = output[0].squeeze()
+                E = output[1].squeeze()
+            else:
+                if self.scatter:
+                    E = output[0].squeeze()
+                    predict = output[1].squeeze()
+
+                else:
+                    predict = torch.cat(output,-1).transpose(2,3)
+    
+
+        ##### loss #####
+        if self.meta is None:
+            real_F = real_F.to(self.device).squeeze()
+            if viz:
+                plt.figure('pred')
+                for j in range(10):
+                    plt.plot(F[0,:,j].cpu().numpy())
+                plt.figure('gt')
+                for j in range(10):
+                    plt.plot(real_F[0,:,j].cpu().numpy())
+                plt.show()
+            if self.F_only:
+                loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
+            else:
+                real_E = real_E.to(self.device).squeeze()
+                # condition = Variable(torch.ones(1, 1), requires_grad=False).to(self.device) # for CosineEmbeddingLoss
+                loss = self.loss(E, real_E) #+ self.loss(F, real_F)
+
+        else:
+            if self.scatter:
+                real_E[0] = real_E[0].squeeze()
+                real_E[1] = real_E[1].squeeze()
+                # loss = self.loss(E, real_E[0], 0.0) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:], 0.0)\
+                        # + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:], 0.0)
+                loss = 0.5*self.loss(E, real_E[0]) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
+                        + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])\
+                       + 0.5*self.loss2(E, real_E[0]) + self.loss2(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
+                        + 0.5 * self.loss2(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])
+            else:
+                # more penalty on the first order
+                loss = 4 * self.loss(E[:,:,self.meta[0]], real_E[:,:,self.meta[0]], 
+                    0.0) / 7 + 2 * self.loss(E[:,:,self.meta[1]], real_E[:,:,self.meta[1]], 
+                    0.0) / 7 + self.loss(E[:,:,self.meta[2]], real_E[:,:,self.meta[2]], 0.0)
+        #########################
+
+        ##### metrics #####
+        if self.scatter:
+            mae = util.masked_mae(E,real_E[0],0).item()
+            mape = util.masked_mape(E,real_E[0],0).item()
+            rmse = util.masked_rmse(E,real_E[0],0).item()
+            
+        else:
+            if self.F_only:      
+                mae = util.masked_mae(F,real_F,0).item()
+                mape = util.masked_mape(F,real_F,0).item()
+                rmse = util.masked_rmse(F,real_F,0).item()
+                cc, _, _ = util.get_cc(F, real_F)
+            else:
+                mae = util.masked_mae(E,real_E,0).item()
+                mape = util.masked_mape(E,real_E,0).item()
+                rmse = util.masked_rmse(E,real_E,0).item()
+                cc, _, _ = util.get_cc(E, real_E)
+        return loss.item(), mae, mape, rmse, cc, F, E, predict
+    

@@ -382,7 +382,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     '''
 
     comn_ids = get_comn_ids()
-    # comn_ids = ['1043f'] # only using one subj's data '1145h'
+    comn_ids = ['1145h'] # only using one subj's data '1043f'
     print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 
@@ -630,8 +630,10 @@ def get_cc(pred, real):
     p_max = 0
     for i in range(len(pred)):
         cur_cc = []
-        for node_i in range(len(pred[i])):
-            r, pval = pearsonr(pred[i][node_i].detach().cpu().numpy(),real[i][node_i].detach().cpu().numpy())
+        # for node_i in range(len(pred[i])):
+        for node_i in range(pred.shape[2]):
+            # r, pval = pearsonr(pred[i][node_i].detach().cpu().numpy(),real[i][node_i].detach().cpu().numpy())
+            r, pval = pearsonr(pred[i,:,node_i].detach().cpu().numpy(),real[i,:,node_i].detach().cpu().numpy())            
             cur_cc.append(r)
             if pval < p_min:
                 p_min = pval

@@ -13,6 +13,7 @@ import glob
 from sklearn.preprocessing import RobustScaler
 from sklearn.utils import shuffle
 from kymatio.numpy import Scattering1D
+import networkx as nx
 import ipdb
 
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
@@ -291,6 +292,17 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         nTest = len(adj_mx) - nTrain - nValid
 
         print('Train, Val, Test numbers:', nTrain, nValid, nTest)
+
+        ## randomize SC entries to see the sensitivity to SC
+        # use completely random SC w/ same level of sparsity
+        n = args.num_nodes # number of nodes
+        p = np.count_nonzero(adj_mx[0][0]) / (n*(n-1)/2) # probability for edge creation
+        # G = nx.gnp_random_graph(n, p*2)
+        # G = nx.newman_watts_strogatz_graph(n,5,p)
+        G = nx.gnm_random_graph(n, np.count_nonzero(adj_mx[0][0]))
+        for adj in adj_mx:
+            # G = nx.gnp_random_graph(n, p)
+            adj = util.mod_adj(nx.to_numpy_matrix(G), args.adjtype)
 
         # separate adj matrices into train-val-test samples
         adj_train = [[] for i in range(len(adj_mx[0]))]

@@ -235,7 +235,7 @@ class trainer():
             # loss = self.loss(pred_sig, real[0].squeeze()) + self.loss(predict, real[1].squeeze())
         else:
             real = real.squeeze()
-            loss = self.loss(predict, real, 0.0)
+            loss = self.loss(predict, real)
             # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
 
         loss.backward()
@@ -575,7 +575,7 @@ class trainer():
                 for j in range(5):
                     plt.plot(real.detach().cpu().numpy()[0,j,:])
                 plt.show()         
-            loss = self.loss(predict, real, 0.0)
+            loss = self.loss(predict, real)
             # loss = self.loss(torch.cat((F, predict), 1), real, 0.0)
         
         if self.scatter:

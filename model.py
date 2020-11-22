@@ -24,7 +24,7 @@ class nconv2(nn.Module):
 
     def forward(self,x, A):
         ### we want: (Ax^T)^T for A's 1,2 channel & x's 1,2 channel == xA^T
-        x = torch.einsum('ncvl,nvw->ncwl',(x,torch.transpose(A, -1, -2))) # nothing wrong... emm
+        x = torch.einsum('ncvl,nvw->ncwl',(x,torch.transpose(A, -1, -2)+torch.eye(len(A[0]))[None,...].repeat(len(A),1,1).to(A.device))) # nothing wrong... emm
         # x = torch.einsum('ncvl,nvw->ncwl',(x,A)) #this one's [0,...,0] == torch.matmul(x[0,...,0], A[0])
         # x = torch.einsum('ncwl,nvw->ncvl',(x,A)) #this one's [0,0] == torch.matmul(A[0], x[0,0]))
         return x.contiguous()
@@ -692,8 +692,8 @@ class gwnet_diff_G(nn.Module):
 
             # x = x + residual[:, :, :, -x.size(3):]
             # add t representation
-            # x = x + residual[:, :, :, -x.size(3):] + t_rep
-            x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
+            x = x + residual[:, :, :, -x.size(3):]# + t_rep
+            # x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
             x = self.bn[i](x)
             # print(x.shape)
 
@@ -978,7 +978,7 @@ class gwnet_diff_G_Fonly(nn.Module):
             # add t representation
             # x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
 
-            x = self.bn[i](x) #torch.Size([8, 32, 200, 15])
+            # x = self.bn[i](x) #torch.Size([8, 32, 200, 15])
 
         # if viz:
         #     print(skip.shape)

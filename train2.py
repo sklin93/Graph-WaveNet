@@ -70,9 +70,32 @@ def signaltonoise(a, axis=0, ddof=0):
     m = a.mean(axis)
     sd = a.std(axis=axis, ddof=ddof)
     return np.where(sd == 0, 0, m/sd)
-    
+
+def proc_helper(a, b, len_adj):
+    assert len(a) == len(b), 'input length do not match'
+    # deal with adj_mx repetitions (using idx)
+    adj_mx_idx = np.arange(len_adj).repeat(len(a)//len_adj)
+    # shuffle for mixing different subjects' image
+    adj_mx_idx, a, b = shuffle(adj_mx_idx, a, b, random_state = 0)
+
+    # train-val-test split
+    num_total = len(a)
+    nTrain = round(0.7 * num_total)
+    nValid = round(0.15 * num_total)
+    nTest = num_total - nTrain - nValid
+    print('Train, Val, Test numbers:', nTrain, nValid, nTest)
+
+    # scaler
+    scaler_a = util.StandardScaler(mean=a[:nTrain].mean(), 
+                                    std=a[:nTrain].std())
+    a = scaler_a.transform(a)
+    scaler_b = util.StandardScaler(mean=b[:nTrain].mean(), 
+                                    std=b[:nTrain].std())
+    b = scaler_b.transform(b) ### ??? different modality has some problem here..when both needs an individual scaler
+    return nTrain, nValid, nTest, a, b, scaler_a, scaler_b, adj_mx_idx
+  
 def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl', 
-         scatter=False, subsample=False, map=False, F_only=False):
+         scatter=False, subsample=False, _map=False, F_only=False):
     '''directly loading trained model/ generated syn data
        scatter: whether use wavelet scattering
        subsample: whether subsample EEG signals to the same temporal resolution as fMRI's
@@ -84,10 +107,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
     if args.data == 'CRASH':
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-        adj_mx, fmri_mat, eeg_mat = shuffle(adj_mx, fmri_mat, eeg_mat,random_state = 0)
 
         basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
         assert int(args.seq_length % basic_len) == 0
+        offset = args.seq_length // basic_len
 
         if False:
             ## randomize SC entries to see the sensitivity to SC
@@ -100,60 +123,50 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             for i in range(len(adj_mx)):
                 # _G = nx.gnp_random_graph(n, p)
                 adj_mx[i] = util.mod_adj(nx.to_numpy_matrix(_G), args.adjtype)
+        
+        ipdb.set_trace()
+        ###TODO: plot irregular fMRI spectrum; band pass filter with 0.1hz
 
-        # if not scatter:
-        if True: #TODO: compare preprocessing performance difference
-            # Standardize data
-            num_subj, t_f, n_f = fmri_mat.shape
-            _, t_e, n_e = eeg_mat.shape
-            # # ######## per channel standardization
-            # r_mean = fmri_mat.reshape(-1, fmri_mat.shape[-1]).mean(0) # region means (fMRI)
-            # r_std = fmri_mat.reshape(-1, fmri_mat.shape[-1]).std(0)
-            # e_mean = eeg_mat.reshape(-1, eeg_mat.shape[-1]).mean(0) # electrode means (EEG)
-            # e_std = eeg_mat.reshape(-1, eeg_mat.shape[-1]).std(0)
+        # band pass filter fMRI
+        cutoff = (1/0.91)/(2*3)
+        for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 326, 200)
+            for j in range(fmri_mat.shape[-1]):
+                fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 0.91)
+        ipdb.set_trace()
 
-            # fmri_mat -= r_mean[None,None,:]
-            # fmri_mat /= r_std[None,None,:]
-            # eeg_mat -= e_mean[None,None,:]
-            # eeg_mat /= e_std[None,None,:]
-            
-            _mean = fmri_mat.mean()
-            _std = fmri_mat.std()
-            fmri_mat -= _mean
-            fmri_mat /= _std
 
-            _mean = eeg_mat.mean()
-            _std = eeg_mat.std()
-            eeg_mat -= _mean
-            eeg_mat /= _std
-            # # ################################
-            # fmri_mat = fmri_mat.reshape(num_subj, -1)
-            # _mean = fmri_mat.mean(0)
-            # _std = fmri_mat.std(0)
-            # ipdb.set_trace()
-            # fmri_mat -= _mean
-            # fmri_mat /= _std
-            # fmri_mat = fmri_mat.reshape(num_subj, t_f, n_f)
-            
-            # eeg_mat = eeg_mat.reshape(num_subj, -1)
-            # _mean = eeg_mat.mean(0)
-            # _std = eeg_mat.std(0)
-            # eeg_mat -= _mean
-            # eeg_mat /= _std
-            # eeg_mat = eeg_mat.reshape(num_subj, t_e, n_e)
+        K = int(args.seq_length / F_t)
+        F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
+                                                    int(basic_len/F_t))[:, None]
+        fmri_mat = fmri_mat[:, F_idxer,:]
 
-            # Min-max normalization
-            fmri_mat = (fmri_mat - fmri_mat.min()) / (fmri_mat.max() - fmri_mat.min())
-            eeg_mat = (eeg_mat - eeg_mat.min()) / (eeg_mat.max() - eeg_mat.min())
+        if _map: # for signal mapping
+            fmri_mat = fmri_mat.reshape(-1, *fmri_mat.shape[2:])
 
-            cutoff = (1/0.91)/(2*3)
-            # band pass filter fMRI
-            for i in range(fmri_mat.shape[0]):
-                for j in range(fmri_mat.shape[1]):
-                    fmri_mat[i,j] = util.butter_lowpass_filter(fmri_mat[i,j], cutoff, 0.91)
-        else:
-            fmri_mat = fmri_mat / np.max(np.abs(fmri_mat))
-            eeg_mat = eeg_mat / np.max(np.abs(eeg_mat))
+            E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
+                            eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
+            eeg_mat = eeg_mat[:, E_idxer, :]
+            eeg_mat.reshape(-1, *eeg_mat.shape[2:])
+
+            nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
+                                            proc_helper(fmri_mat, eeg_mat, len(adj_mx))
+        
+        else: # for fmri signal predictions
+            fmri_mat_x = fmri_mat[:,:-offset]
+            fmri_mat_y = fmri_mat[:,offset:]
+
+            fmri_mat_x = fmri_mat_x.reshape(-1, *fmri_mat_x.shape[2:])
+            fmri_mat_y = fmri_mat_y.reshape(-1, *fmri_mat_y.shape[2:])
+
+            nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
+                                        proc_helper(fmri_mat_x, fmri_mat_y, len(adj_mx))
+
+        # # Min-max normalization
+        # _input = (_input - _input.min()) / (_input.max() - _input.min())
+        # _gt = (_gt - _gt.min()) / (_gt.max() - _gt.min())
+
+        # fmri_mat = fmri_mat / np.max(np.abs(fmri_mat))
+        # eeg_mat = eeg_mat / np.max(np.abs(eeg_mat))
 
         '''
         print('eeg_mat min max:', eeg_mat.min(), eeg_mat.max())
@@ -294,12 +307,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         F_t = None
         
     if args.data == 'CRASH':
-        nTrain = round(0.7 * len(adj_mx))
-        nValid = round(0.15 * len(adj_mx))
-        nTest = len(adj_mx) - nTrain - nValid
-
-        print('Train, Val, Test numbers:', nTrain, nValid, nTest)
-
         # separate adj matrices into train-val-test samples
         adj_train = [[] for i in range(len(adj_mx[0]))]
         for a in adj_mx[:nTrain]:
@@ -319,10 +326,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 adj_test[i].append(a[i])
         adj_test = [np.stack(np.asarray(i)) for i in adj_test]
         
-        scaler_F = util.StandardScaler(mean=fmri_mat[:nTrain].mean(), 
-                                        std=fmri_mat[:nTrain].std())
-        scaler_E = util.StandardScaler(mean=eeg_mat[:nTrain].mean(), 
-                                        std=eeg_mat[:nTrain].std())
         print(args)
         supports = {}
         supports['train'] = adj_train
@@ -339,16 +342,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
         if args.aptonly:
             supports['train'] = supports['val'] = supports['test'] = None
-
-        offset = args.seq_length // basic_len
-        E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
-                            eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
-
-        K = int(args.seq_length / F_t)
-        F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
-                                                int(basic_len/F_t))[:, None]
-        # x = F_idxer[:-offset]
-        # y = F_idxer[offset:]
 
         assert len(F_idxer) == len(E_idxer)
         sample_per_suj = len(F_idxer) - offset
@@ -431,7 +424,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     if F_only:
                         y_E = None
                     else:
-                        if map:
+                        if _map:
                             # map to current E
                             y_E = np.concatenate([eeg_mat[:,E_idxer,:][:,:-offset][c][None,...] for c in choice])
                             
@@ -517,14 +510,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     subj_F = fmri_mat[nTrain + subj_id, F_idxer, :]
                     # E is only for outputs
                     # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
-                    if map:
+                    if _map:
                         subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
                     else:
                         subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
                     
                     # ####### overfit single batch
                     # subj_F = fmri_mat[subj_id, F_idxer, :] 
-                    # if map:
+                    # if _map:
                     #     subj_E = eeg_mat[subj_id, E_idxer, :][:-offset]
                     # else:
                     #     subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
@@ -941,14 +934,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
             # E is only for outputs
             # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
-            if map:
+            if _map:
                 subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset]
             else:
                 subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
 
             # ####### overfit single batch
             # subj_F = fmri_mat[subj_id, F_idxer, :] 
-            # if map:
+            # if _map:
             #     subj_E = eeg_mat[subj_id, E_idxer, :][:-offset]
             # else:
             #     subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
@@ -1287,6 +1280,6 @@ if __name__ == "__main__":
     t1 = time.time()
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
-    main(scatter=False, map=True, F_only=True)
+    main(scatter=False, _map=False, F_only=True)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

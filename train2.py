@@ -124,27 +124,28 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 # _G = nx.gnp_random_graph(n, p)
                 adj_mx[i] = util.mod_adj(nx.to_numpy_matrix(_G), args.adjtype)
         
-        ipdb.set_trace()
-        ###TODO: plot irregular fMRI spectrum; band pass filter with 0.1hz
-
-        # band pass filter fMRI
-        cutoff = (1/0.91)/(2*3)
-        for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 326, 200)
-            for j in range(fmri_mat.shape[-1]):
-                fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 0.91)
-        ipdb.set_trace()
-
+        # ipdb.set_trace()
+        # ###TODO: plot irregular fMRI spectrum; band pass filter with 0.1hz
+        # # band pass filter fMRI
+        # cutoff = (1/0.91)/(2*3)
+        # for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 326, 200)
+        #     for j in range(fmri_mat.shape[-1]):
+        #         fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 0.91)
+        # ipdb.set_trace()
 
         K = int(args.seq_length / F_t)
         F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
                                                     int(basic_len/F_t))[:, None]
         fmri_mat = fmri_mat[:, F_idxer,:]
+        sample_per_suj = len(F_idxer) - offset
+        print('sample per subj', sample_per_suj)
 
         if _map: # for signal mapping
             fmri_mat = fmri_mat.reshape(-1, *fmri_mat.shape[2:])
 
             E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
                             eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
+            assert len(F_idxer) == len(E_idxer)
             eeg_mat = eeg_mat[:, E_idxer, :]
             eeg_mat.reshape(-1, *eeg_mat.shape[2:])
 
@@ -308,45 +309,30 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         
     if args.data == 'CRASH':
         # separate adj matrices into train-val-test samples
-        adj_train = [[] for i in range(len(adj_mx[0]))]
-        for a in adj_mx[:nTrain]:
-            for i in range(len(adj_train)):
-                adj_train[i].append(a[i])
-        adj_train = [np.stack(np.asarray(i)) for i in adj_train]
 
-        adj_val = [[] for i in range(len(adj_mx[0]))]
-        for a in adj_mx[nTrain:-nTest]:
-            for i in range(len(adj_val)):
-                adj_val[i].append(a[i])
-        adj_val = [np.stack(np.asarray(i)) for i in adj_val]
-
-        adj_test = [[] for i in range(len(adj_mx[0]))]
-        for a in adj_mx[-nTest:]:
-            for i in range(len(adj_test)):
-                adj_test[i].append(a[i])
-        adj_test = [np.stack(np.asarray(i)) for i in adj_test]
+        _adj = [[] for i in range(len(adj_mx[0]))]
+        for a in adj_mx:
+            for i in range(len(_adj)):
+                _adj[i].append(a[i])
+        adj_mx = [np.stack(np.asarray(i)) for i in _adj]
         
         print(args)
         supports = {}
-        supports['train'] = adj_train
-        supports['val'] = adj_val
-        supports['test'] = adj_test
+        supports['train'] = supports['val'] = supports['test'] = adj_mx
 
-        adjinit = {}
-        if args.randomadj:
-            adjinit['train'] = adjinit['val'] = adjinit['test'] = None
-        else:
-            adjinit['train'] = supports['train'][0]
-            adjinit['val'] = supports['val'][0]
-            adjinit['test'] = supports['test'][0]
+        adjinit = None
+        if args.addaptadj:
+            adjinit = {}
+            if args.randomadj:
+                adjinit['train'] = adjinit['val'] = adjinit['test'] = None
+            else:
+                adjinit['train'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[:nTrain]]) 
+                ipdb.set_trace()# TODO: adjinit['train'] need to be shuffled with train set
+                adjinit['train'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[nTrain:-nTest]])
+                adjinit['val'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[-nTest:]])
 
-        if args.aptonly:
-            supports['train'] = supports['val'] = supports['test'] = None
-
-        assert len(F_idxer) == len(E_idxer)
-        sample_per_suj = len(F_idxer) - offset
-        batch_per_sub = sample_per_suj // args.batch_size
-        print('Batch per subject:', batch_per_sub)
+            if args.aptonly:
+                supports = None
 
         if scatter:
             engine = trainer(coeffs_scaler, args.in_dim, args.seq_length, args.num_nodes, 
@@ -357,7 +343,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                              meta=[order0[0],order1[0],order2[0]],scatter=True, F_only=F_only, 
                              batch_size=args.batch_size)
         else:
-            engine = trainer([scaler_F,scaler_E], args.in_dim, args.seq_length, args.num_nodes, 
+            engine = trainer([scaler_in,scaler_out], args.in_dim, args.seq_length, args.num_nodes, 
             # engine = trainer([scaler_F,scaler_E], args.in_dim, 1000, args.num_nodes, # predict shorter
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
@@ -367,12 +353,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         if model_name is None or finetune is True:
             if finetune is True:
                 pretrained_dict = torch.load(model_name)
-                # del pretrained_dict['end_module_add.1.weight']
-                # del pretrained_dict['end_module_add.1.bias']
-                # del pretrained_dict['end_mlp_e.1.weight'] 
-                # del pretrained_dict['end_mlp_e.1.bias']
-                # del pretrained_dict['end_mlp_f.1.weight']
-                # del pretrained_dict['end_mlp_f.1.bias']
                 
                 model_dict = engine.model.state_dict()
                 pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
@@ -387,98 +367,41 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             min_loss = float('Inf')
             grads = []
 
-            sample_idx = np.arange(nTrain*sample_per_suj)
-            subj_idx = np.arange(nTrain).repeat(sample_per_suj)
-            within_subj_idx = np.arange(sample_per_suj)[None,...].repeat(nTrain,0).flatten()
-
             for i in range(1,args.epochs+1):
                 if i % 3 == 0:
                     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
                     for g in engine.optimizer.param_groups:
                         g['lr'] *= 0.9
+
                 train_loss = []
                 train_mae = []
                 train_mape = []
                 train_rmse = []
                 t1 = time.time()
                 engine.set_state('train')
+                x = _input[:nTrain]
+                y = _gt[:nTrain]
+                adj_idx = adj_mx_idx[:nTrain]
 
                 iter = 0
 
-                tmp = list(zip(sample_idx, subj_idx, within_subj_idx))
-                np.random.shuffle(tmp)
-                sample_idx, subj_idx, within_subj_idx = zip(*tmp)
-                
-                for batch_i in range(len(sample_idx)//args.batch_size):
-                    subj_id = subj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                    within_subj_id = within_subj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                    choice = list(zip(subj_id, within_subj_id))
+                # shuffle in-out-adj_idx
+                x, y, adj_idx = shuffle(x, y, adj_idx)
 
-                    # input current F
-                    x_F = np.concatenate([fmri_mat[:,F_idxer,:][:,:-offset][c][None,...] for c in choice])
-                    x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
-                    # pred future F
-                    y_F = np.concatenate([fmri_mat[:,F_idxer,:][:,offset:][c][None,...] for c in choice])
-                    y_F = torch.Tensor(y_F[...,None])#.transpose(1, 3)
-                    
-                    if F_only:
-                        y_E = None
+                for batch_i in range(nTrain//args.batch_size):
+                    _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
+                    if scatter:
+                        ipdb.set_trace()
+                        _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        coeff_y = scattering(_y.transpose(0,2,1))
+                        _y = torch.Tensor(_y).to(device)
+                        coeff_y = torch.Tensor(coeff_y).to(device)
+                        _y = [_y, coeff_y]
                     else:
-                        if _map:
-                            # map to current E
-                            y_E = np.concatenate([eeg_mat[:,E_idxer,:][:,:-offset][c][None,...] for c in choice])
-                            
-                            # ### test random performance (within same subject)
-                            # y_E = eeg_mat[np.random.randint(eeg_mat.shape[0]), E_idxer, :][:-offset][
-                            #             batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                            # np.random.shuffle(y_E)
-                        else:
-                            # pred future E
-                            y_E = np.concatenate([eeg_mat[:,E_idxer,:][:,offset:][c][None,...] for c in choice])
-                                     
-                        if scatter:
-                            trainy = scattering(y_E.transpose(0,2,1))#[...,order1[0],:] # order0 only
-                            # trainy = scattering(y_E.transpose(0,2,1)[...,:1000])#[...,order0[0],:] # predict shorter
-                            # # scale 
-                            # trainy = ((trainy - mean)/std)
-                            # plt.figure()
-                            # plt.plot(trainy[0,0,0])
-                            trainy = torch.Tensor(trainy).to(device)
+                        _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
-                            sigy = y_E.transpose(0, 2, 1)
-                            # sigy = y_E.transpose(0, 2, 1)[...,:1000] # predict shorter
-                            # plt.figure()
-                            # plt.plot(sigy[0,0])
-                            # plt.show()
-                            # ipdb.set_trace()
-                            sigy = torch.Tensor(sigy).to(device)
-                            y_E = [sigy, trainy]             
-                            # y_E = scattering(y_E.transpose(0,2,1))  #(16, 64, 42, 45)
-                            # # y_E[:,:,order0] *= 1000
-                            # # y_E[:,:,order1] *= 10000
-                            # # y_E[:,:,order2] *= 100000
-                            # # y_E = y_E.reshape(*y_E.shape[:-2],-1) #(16, 1, 64, 1890)
-                            # # y_E = torch.Tensor(y_E[:,None,...])
-
-                            # # standardize coeff
-                            # y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
-                            # y_E = torch.Tensor(y_E)
-
-                        else:
-                            y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
-                            # y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)[...,:1000] # predict shorter
-                            
-                            if subsample:
-                                _y_E = []
-                                # use averaged E
-                                for y_i in range(int(y_E.shape[-1]/F_t)):
-                                    _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
-                                # use subsampled E (use the mid point of each period)
-                                # for y_i in range(int(y_E.shape[-1]/F_t)):
-                                #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
-                                y_E = torch.stack(_y_E, -1)
-
-                    metrics = engine.train_CRASH(x_F, y_F, y_E, region_assignment, np.asarray(subj_id))
+                    ipdb.set_trace()
+                    metrics = engine.train_CRASH(_x, _y, region_assignment, adj_idx)
 
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])

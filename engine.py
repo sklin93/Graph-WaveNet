@@ -171,9 +171,12 @@ class trainer():
 
             supports = self.state_supports
             supports = [supports[i][adj_idx] for i in range(len(supports))]
-            aptinit = self.aptinit[self.state]
+            
+            aptinit = self.aptinit
             if aptinit is not None:
-                aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
+                aptinit = aptinit[self.state]
+                if aptinit is not None:
+                    aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
             output = self.model(input, supports, aptinit)
             # output = self.model(input) # validate SC
@@ -273,15 +276,19 @@ class trainer():
 
         supports = self.state_supports
         supports = [s[adj_idx] for s in supports]
-        aptinit = self.aptinit[self.state]
+        
+        aptinit = self.aptinit
         if aptinit is not None:
-            aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
+            aptinit = aptinit[self.state]
+            if aptinit is not None:
+                aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
         output = self.model(input, supports, aptinit)
         # output = self.model(input) # validate SC
 
         if self.F_only:
             F = output.squeeze()
+            ipdb.set_trace()
         else:        
             if pooltype == 'None':
                 if self.meta is None:
@@ -337,6 +344,7 @@ class trainer():
                 # plt.plot(F[0,0].detach().cpu().numpy())
                 # plt.plot(F[0,1].detach().cpu().numpy())
                 # plt.show()
+                ipdb.set_trace()
                 loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()

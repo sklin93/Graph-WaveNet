@@ -382,7 +382,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     '''
 
     comn_ids = get_comn_ids()
-    # comn_ids = ['1043f'] # only using one subj's data
+    comn_ids = ['1043f'] # only using one subj's data
     print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 
@@ -458,7 +458,8 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
         if np.abs(fmri_mat[i]).max() < 6 : 
             valid_f_idx.append(i)
     fmri_mat = fmri_mat[valid_f_idx]
-
+    # remove corresponding adj
+    adjs = [adjs[i] for i in valid_f_idx]
     # remove EEG frames corresponds to removed fmri ones & only keep those sessions have valid fmri
     eeg_mat = eeg_mat[valid_f_idx, int(F_t*f_remove):int(F_t*(fmri_mat.shape[1]+f_remove)), :]
 

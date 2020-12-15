@@ -357,8 +357,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                              meta=[order0[0],order1[0],order2[0]],scatter=True, F_only=F_only, 
                              batch_size=args.batch_size)
         else:
-            engine = trainer([scaler_in,scaler_out], args.in_dim, args.seq_length, args.num_nodes, 
-            # engine = trainer([scaler_F,scaler_E], args.in_dim, 1000, args.num_nodes, # predict shorter
+            engine = trainer([scaler_in,scaler_out], args.in_dim, args.seq_length, args.num_nodes,
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
                              args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
@@ -403,6 +402,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 x, y, adj_idx = shuffle(x, y, adj_idx)
 
                 for batch_i in range(nTrain//args.batch_size):
+                    _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
                     if scatter:
                         ipdb.set_trace()
@@ -414,8 +414,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     else:
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
-                    ipdb.set_trace()
-                    metrics = engine.train_CRASH(_x, _y, region_assignment, adj_idx)
+                    metrics = engine.train_CRASH(_x, _y, None, region_assignment, _adj_idx)
 
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])

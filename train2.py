@@ -125,6 +125,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 adj_mx[i] = util.mod_adj(nx.to_numpy_matrix(_G), args.adjtype)
         
         # ipdb.set_trace()
+        scaler = util.StandardScaler(mean=fmri_mat.mean(), 
+                                    std=fmri_mat.std())
+        fmri_mat = scaler.transform(fmri_mat)
+        for i in range(200):
+            plt.plot(fmri_mat[5,:,i])
+        plt.show()
+        ipdb.set_trace()
+
         # ###TODO: plot irregular fMRI spectrum; band pass filter with 0.1hz
         # # band pass filter fMRI
         # cutoff = (1/0.91)/(2*3)

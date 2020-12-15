@@ -382,7 +382,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     '''
 
     comn_ids = get_comn_ids()
-    comn_ids = ['1043f'] # only using one subj's data
+    # comn_ids = ['1043f'] # only using one subj's data
     print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 
@@ -410,6 +410,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     eeg_mat = []
     adjs = []
     fmri_mat = []
+    subj_id = []
 
     # sub_ses = {}
     for subj in comn_ids:
@@ -439,15 +440,29 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
                         adjs.append(mod_adj(sc[subj][k], adjtype))
                         fmri_mat.append(cur_fmri)
                         eeg_mat.append(cur_eeg)
+                        subj_id.append((subj,k))
         # sub_ses[subj] = comn_sess
     del fmri
     del eeg
+
     fmri_mat = np.stack(fmri_mat)
     eeg_mat = np.stack(eeg_mat)
+    ''' dealing with huge spikes in the data'''
+    # fmri: frames at the beginning always have large spikes, so remove the first 5 frames
+    f_remove = 5 # number of frames to be removed at the beginning
+    fmri_mat = fmri_mat[:, f_remove:-1, :] # keep the frame number mod 5 == 0
+
+    # only use the sessions without huge spikes: thresholding at 6
+    valid_f_idx = []
+    for i in range(len(fmri_mat)):
+        if np.abs(fmri_mat[i]).max() < 6 : 
+            valid_f_idx.append(i)
+    fmri_mat = fmri_mat[valid_f_idx]
+
+    # remove EEG frames corresponds to removed fmri ones & only keep those sessions have valid fmri
+    eeg_mat = eeg_mat[valid_f_idx, int(F_t*f_remove):int(F_t*(fmri_mat.shape[1]+f_remove)), :]
 
     region_assignment = get_region_assignment(num_region) #{EEG_electrodes: brain region}
-
-    # TODO: normalize/Standardize
 
     return adjs, fmri_mat, eeg_mat, region_assignment, F_t
 

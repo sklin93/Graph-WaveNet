@@ -253,7 +253,8 @@ def get_fmri(comn_ids, num_region):
 
             data = spio.loadmat(name[0])
             # TODO: 'bold' or 'corrected_bold'?
-            fmri[_subj][cur_sess_num] = data['corrected_bold'][:, :num_region]
+            # fmri[_subj][cur_sess_num] = data['corrected_bold'][:, :num_region]
+            fmri[_subj][cur_sess_num] = data['bold'][:, :num_region]
     return fmri
 
 def get_sc(comn_ids, num_region):

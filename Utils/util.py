@@ -382,7 +382,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     '''
 
     comn_ids = get_comn_ids()
-    comn_ids = ['1043f'] # only using one subj's data
+    # comn_ids = ['1043f'] # only using one subj's data
     print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 

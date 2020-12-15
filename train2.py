@@ -440,75 +440,33 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 s1 = time.time()
                 engine.set_state('val')
                 # engine.set_state('train') # overfit single batch
-                for subj_id in range(nValid):
-                    # for F&E: nTrain + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
-                    # subj_F = scaler_F.transform(fmri_mat[nTrain + subj_id, F_idxer, :])
-                    subj_F = fmri_mat[nTrain + subj_id, F_idxer, :]
-                    # E is only for outputs
-                    # subj_E =  scaler_E.transform(eeg_mat[nTrain + subj_id, E_idxer, :][offset:]) 
-                    if _map:
-                        subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][:-offset]
+                x = _input[nTrain:nTrain+nValid]
+                y = _gt[nTrain:nTrain+nValid]
+                adj_idx = adj_mx_idx[nTrain:nTrain+nValid]
+
+                for batch_i in range(nValid//args.batch_size):
+                    _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                    _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
+                    if scatter:
+                        ipdb.set_trace()
+                        _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        coeff_y = scattering(_y.transpose(0,2,1))
+                        _y = torch.Tensor(_y).to(device)
+                        coeff_y = torch.Tensor(coeff_y).to(device)
+                        _y = [_y, coeff_y]
                     else:
-                        subj_E = eeg_mat[nTrain + subj_id, E_idxer, :][offset:]
-                    
-                    # ####### overfit single batch
-                    # subj_F = fmri_mat[subj_id, F_idxer, :] 
-                    # if _map:
-                    #     subj_E = eeg_mat[subj_id, E_idxer, :][:-offset]
-                    # else:
-                    #     subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
-                    # #######
+                        _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
-                    for batch_i in range(batch_per_sub):
-                        x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                        x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
-                        
-                        y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                        y_F = torch.Tensor(y_F[...,None])#.transpose(1, 3)
-                        
-                        if F_only:
-                            y_E = None
-                        else:
-                            y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-      
-                            if scatter:
-                                testy = scattering(y_E.transpose(0,2,1))#[...,order1[0],:] # order0 only
-                                # testy = scattering(y_E.transpose(0,2,1)[...,:1000])#[...,order0[0],:] # predict shorter
-                                # # scale 
-                                # testy = ((testy - mean)/std)
-                                testy = torch.Tensor(testy).to(device)
+                    if batch_i == 0: # only viz the first one
+                        metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx, viz=False)
+                    else:
+                        metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx)                            
 
-                                sigy = torch.Tensor(y_E).to(device)
-                                sigy = sigy.transpose(1, 2)
-                                # sigy = sigy.transpose(1, 2)[...,:1000] # predict shorter
-                                y_E = [sigy, testy]
-                            
-                            else:
-                                y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
-                                # y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)[...,:1000] # predict shorter
-
-                                if subsample:
-                                    _y_E = []
-                                    # use averaged E
-                                    for y_i in range(int(y_E.shape[-1]/F_t)):
-                                        _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
-                                    # use subsampled E (use the mid point of each period)
-                                    # for y_i in range(int(y_E.shape[-1]/F_t)):
-                                    #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
-                                    y_E = torch.stack(_y_E, -1)
-
-                        if subj_id == 0 and batch_i == 0: # only viz the first one
-                            metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
-                                                        [subj_id]*args.batch_size, viz=False)
-                        else:
-                            metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment,
-                                                        [subj_id]*args.batch_size)                            
-
-                        valid_loss.append(metrics[0])
-                        valid_mae.append(metrics[1])
-                        valid_mape.append(metrics[2])
-                        valid_rmse.append(metrics[3])
-                        valid_cc.append(metrics[4])
+                    valid_loss.append(metrics[0])
+                    valid_mae.append(metrics[1])
+                    valid_mape.append(metrics[2])
+                    valid_rmse.append(metrics[3])
+                    valid_cc.append(metrics[4])
 
                     # plt.plot(metrics[-1][...,order0,:][0,0,0,0].cpu().numpy())
                     # plt.show()
@@ -857,128 +815,83 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
     a_cc = []
 
     if args.data == 'CRASH':
-        engine.set_state('test')
-        # engine.set_state('train') # overfit single batch
         real_Fs = []
         real_Es = []
         pred_Fs = []
         pred_Es = []
         pred_coeffs = []
-        for subj_id in range(nTest):
-            # for F&E: nTrain + nValid + subj_id; for adj_idx: subj_id (supports[state] counts from 0)
-            # subj_F = scaler_F.transform(fmri_mat[nTrain + nValid + subj_id, F_idxer, :])
-            subj_F = fmri_mat[nTrain + nValid + subj_id, F_idxer, :]
-            # E is only for outputs
-            # subj_E =  scaler_E.transform(eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:])
-            if _map:
-                subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][:-offset]
+
+        engine.set_state('test')
+        # engine.set_state('train') # overfit single batch
+
+        x = _input[-nTest:]
+        y = _gt[-nTest:]
+        adj_idx = adj_mx_idx[-nTest:]
+
+        for batch_i in range(nTest//args.batch_size):
+            _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+            _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
+            if scatter:
+                ipdb.set_trace()
+                _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                coeff_y = scattering(_y.transpose(0,2,1))
+                _y = torch.Tensor(_y).to(device)
+                coeff_y = torch.Tensor(coeff_y).to(device)
+                _y = [_y, coeff_y]
             else:
-                subj_E =  eeg_mat[nTrain + nValid + subj_id, E_idxer, :][offset:]
+                _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
-            # ####### overfit single batch
-            # subj_F = fmri_mat[subj_id, F_idxer, :] 
-            # if _map:
-            #     subj_E = eeg_mat[subj_id, E_idxer, :][:-offset]
-            # else:
-            #     subj_E = eeg_mat[subj_id, E_idxer, :][offset:]
-            # ######
+            if batch_i == 0: # only viz the first one
+                metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx, viz=True)
+            else:
+                metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx) 
 
-            for batch_i in range(batch_per_sub):
-                x_F = subj_F[:-offset][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                x_F = torch.Tensor(x_F[...,None]).to(device).transpose(1, 3)
-                
-                y_F = subj_F[offset:][batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                y_F = torch.Tensor(y_F[...,None])#.transpose(1, 3)
-                y_E = subj_E[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
 
-                if scatter:                            
-                    testy = scattering(y_E.transpose(0,2,1))#[...,order1[0],:] # order0 only
-                    # testy = scattering(y_E.transpose(0,2,1)[...,:1000]) # predict shorter
-                    # # scale 
-                    # testy = ((testy - mean)/std)
-                    testy = torch.Tensor(testy).to(device)
+            amae.append(metrics[1])
+            amape.append(metrics[2])
+            armse.append(metrics[3])
 
-                    sigy = torch.Tensor(y_E).to(device)
-                    sigy = sigy.transpose(1, 2)
-                    # sigy = sigy.transpose(1, 2)[...,:1000] # predict shorter
-                    y_E = [sigy, testy]
+            real_Fs.append(_y)
+            real_Es.append(None)
+            pred_Fs.append(metrics[-3])
+            pred_Es.append(metrics[-2])
+            pred_coeffs.append(metrics[-1])
 
-                    # sig = y_E.transpose(0,2,1)
-                    # y_E = scattering(sig)
-                    # # y_E[:,:,order0] *= 1000
-                    # # y_E[:,:,order1] *= 10000
-                    # # y_E[:,:,order2] *= 100000
+            if batch_i == 0:
+                if scatter:
+                    # for in-network scatter checking
+                    # ipdb.set_trace()
+                    plt.figure('sig')
+                    plt.plot(real_Es[0][0].squeeze().cpu().numpy()[1,1], label='real')
+                    plt.plot(pred_Es[0].squeeze().cpu().numpy()[1,1], label='pred')
+                    plt.legend()
+                    # plt.savefig('sig.png')
 
-                    # # y_E = y_E.reshape(*y_E.shape[:-2],-1)
-                    # # y_E = torch.Tensor(y_E[:,None,...])
-                    
-                    # # standardize coeff
-                    # y_E = ((y_E - mean)/std)[:,:,order0[0]] #TODO:order0 for now
-                    # y_E = torch.Tensor(y_E)
+                    plt.figure('coeff')
+                    # plt.plot(real_Es[0][1].squeeze().cpu().numpy()[0,0], label='real')
+                    # plt.plot(pred_coeffs[0].squeeze().cpu().numpy()[0,0], label='pred')
+                    plt.plot(real_Es[0][1].squeeze().cpu().numpy()[1,1,0], label='real')
+                    plt.plot(pred_coeffs[0].squeeze().cpu().numpy()[1,1,0], label='pred')
+                    plt.legend()
+                    # plt.savefig('coeff.png')
+                    plt.show()
+                    ipdb.set_trace()   
+
                 else:
-                    y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)
-                    # y_E = torch.Tensor(y_E[...,None]).transpose(1, 3)[...,:1000] # predict shorter
-                    if subsample:
-                        _y_E = []
-                        # use averaged E
-                        for y_i in range(int(y_E.shape[-1]/F_t)):
-                            _y_E.append(y_E[:,:,:,round(y_i*F_t): round((y_i+1)*F_t)].mean(-1))
-                        # use subsampled E (use the mid point of each period)
-                        # for y_i in range(int(y_E.shape[-1]/F_t)):
-                        #     _y_E.append(y_E[:,:,:,int((round(y_i*F_t)+round((y_i+1)*F_t))//2)])
-                        y_E = torch.stack(_y_E, -1)
-
-                metrics = engine.eval_CRASH(x_F, y_F, y_E, region_assignment, 
-                                            [subj_id]*args.batch_size, viz=True)
-
-                amae.append(metrics[1])
-                amape.append(metrics[2])
-                armse.append(metrics[3])
-
-                real_Fs.append(y_F)
-                real_Es.append(y_E)
-                pred_Fs.append(metrics[-3])
-                pred_Es.append(metrics[-2])
-                pred_coeffs.append(metrics[-1])
-
-                if batch_i == 0:
-                    if scatter:
-                        # for in-network scatter checking
-                        # ipdb.set_trace()
-                        plt.figure('sig')
-                        plt.plot(real_Es[0][0].squeeze().cpu().numpy()[1,1], label='real')
-                        plt.plot(pred_Es[0].squeeze().cpu().numpy()[1,1], label='pred')
-                        plt.legend()
-                        # plt.savefig('sig.png')
-
-                        plt.figure('coeff')
-                        # plt.plot(real_Es[0][1].squeeze().cpu().numpy()[0,0], label='real')
-                        # plt.plot(pred_coeffs[0].squeeze().cpu().numpy()[0,0], label='pred')
-                        plt.plot(real_Es[0][1].squeeze().cpu().numpy()[1,1,0], label='real')
-                        plt.plot(pred_coeffs[0].squeeze().cpu().numpy()[1,1,0], label='pred')
-                        plt.legend()
-                        # plt.savefig('coeff.png')
-                        plt.show()
-                        ipdb.set_trace()   
-
-                    else:
-                        if F_only:
-                            plt.figure(0)
-                            plt.plot(real_Fs[0].squeeze().cpu().numpy()[0,0], label='real Fs')
-                            plt.plot(pred_Fs[0].squeeze().cpu().numpy()[0,0], label='pred Fs')
-                            plt.legend()
-                            plt.figure(2)
-                            plt.plot(real_Fs[0].squeeze().cpu().numpy()[0,2], label='real Fs')
-                            plt.plot(pred_Fs[0].squeeze().cpu().numpy()[0,2], label='pred Fs')
-                            plt.legend()
-                            plt.show()
-                        else:
-                            plt.figure()
-                            plt.plot(real_Es[0].squeeze().cpu().numpy()[0,0], label='real Es')
-                            plt.plot(pred_Es[0].squeeze().cpu().numpy()[0,0], label='pred Es')
-                            plt.legend()
-                            plt.show()                            
+                    if F_only:
                         ipdb.set_trace()
+                        plt.figure(0)
+                        plt.plot(real_Fs[0].squeeze().cpu().numpy()[0,0], label='real Fs')
+                        plt.plot(pred_Fs[0].squeeze().cpu().numpy()[0,0], label='pred Fs')
+                        plt.legend()
+                        plt.show()
+                    else:
+                        plt.figure()
+                        plt.plot(real_Es[0].squeeze().cpu().numpy()[0,0], label='real Es')
+                        plt.plot(pred_Es[0].squeeze().cpu().numpy()[0,0], label='pred Es')
+                        plt.legend()
+                        plt.show()                            
+                    ipdb.set_trace()
 
         real_Fs = torch.stack(real_Fs).cpu().numpy()
         real_Fs = real_Fs.reshape(-1, *real_Fs.shape[2:])

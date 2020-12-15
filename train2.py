@@ -124,22 +124,28 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 # _G = nx.gnp_random_graph(n, p)
                 adj_mx[i] = util.mod_adj(nx.to_numpy_matrix(_G), args.adjtype)
         
-        # ipdb.set_trace()
-        scaler = util.StandardScaler(mean=fmri_mat.mean(), 
-                                    std=fmri_mat.std())
-        fmri_mat = scaler.transform(fmri_mat)
-        for i in range(200):
-            plt.plot(fmri_mat[5,:,i])
-        plt.show()
-        ipdb.set_trace()
 
-        # ###TODO: plot irregular fMRI spectrum; band pass filter with 0.1hz
-        # # band pass filter fMRI
-        # cutoff = (1/0.91)/(2*3)
-        # for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 326, 200)
-        #     for j in range(fmri_mat.shape[-1]):
-        #         fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 0.91)
-        # ipdb.set_trace()
+        ''' plot fmri signal in freq domain '''
+        '''
+        xf = np.fft.rfftfreq(fmri_mat.shape[1], d=0.91) # up to nyquist freq: 1/2*(1/0.91)
+        yf = np.zeros_like(xf)
+        for i in range(len(fmri_mat)):
+            for j in range(fmri_mat.shape[-1]):
+                tmp = fmri_mat[i, :, j]
+                yf += np.abs(np.fft.rfft(tmp) / len(tmp))
+                
+        yf /= (fmri_mat.shape[0]*fmri_mat.shape[-1])
+        plt.plot(xf, yf)
+        plt.show()
+        highest_f_component = xf[np.where(yf == max(yf))[0][0]]
+        print('most fMRI f:', highest_f_component, 'Hz, aka 1/', 1/highest_f_component, 's')
+        '''
+
+        #  band pass filter fMRI with 0.2 hz threshold
+        cutoff = 0.2 #(1/0.91)/(2*3)
+        for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 320, 200)
+            for j in range(fmri_mat.shape[-1]):
+                fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 0.91)
 
         K = int(args.seq_length / F_t)
         F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 

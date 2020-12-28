@@ -145,7 +145,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         cutoff = 0.2 #(1/0.91)/(2*3)
         for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 320, 200)
             for j in range(fmri_mat.shape[-1]):
-                fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 0.91)
+                fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 1/0.91)
 
         K = int(args.seq_length / F_t)
         F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
@@ -242,8 +242,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             with open('coeffs_scaler.pkl', 'rb') as handle:
                 coeffs_scaler = pickle.load(handle)
             # for transform: make it into same shape as y_E
-            mean = np.tile(coeffs_scaler['means'][None, None, ...], (args.batch_size, 64, 1, 1))
-            std = np.tile(coeffs_scaler['stds'][None, None, ...], (args.batch_size, 64, 1, 1))
+            mean = np.tile(coeffs_scaler['means'][None, None, ...], (args.batch_size, 61, 1, 1))
+            std = np.tile(coeffs_scaler['stds'][None, None, ...], (args.batch_size, 61, 1, 1))
 
     elif args.data == 'syn':
         if  os.path.isfile(syn_file):
@@ -879,10 +879,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 else:
                     if F_only:
-                        ipdb.set_trace()
-                        plt.figure(0)
-                        plt.plot(real_Fs[0].squeeze().cpu().numpy()[0,0], label='real Fs')
-                        plt.plot(pred_Fs[0].squeeze().cpu().numpy()[0,0], label='pred Fs')
+                        plt.figure(0) # timestep 0
+                        plt.plot(real_Fs[0].squeeze().cpu().numpy()[3,0], label='real Fs')
+                        plt.plot(pred_Fs[0].squeeze().cpu().numpy()[3,0], label='pred Fs')
+                        plt.legend()
+                        plt.show()
+                        plt.figure(1) # timestep 3
+                        plt.plot(real_Fs[0].squeeze().cpu().numpy()[3,3], label='real Fs')
+                        plt.plot(pred_Fs[0].squeeze().cpu().numpy()[3,3], label='pred Fs')
                         plt.legend()
                         plt.show()
                     else:
@@ -921,7 +925,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         pred_Es = pred_Es.transpose(1,0,2)
         pred_Es = pred_Es.reshape((len(pred_Es),-1))
 
-        for viz_node_idx in range(64):
+        for viz_node_idx in range(61):
             viz_num = 5000 # time length of visualization
             # plt.figure()
             # plt.plot(real_Fs[viz_node_idx, :viz_num], label='real F')

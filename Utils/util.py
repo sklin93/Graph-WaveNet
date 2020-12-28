@@ -382,7 +382,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     '''
 
     comn_ids = get_comn_ids()
-    # comn_ids = ['1043f'] # only using one subj's data
+    # comn_ids = ['1041h'] # only using one subj's data 1043f
     print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 
@@ -447,7 +447,37 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
 
     fmri_mat = np.stack(fmri_mat)
     eeg_mat = np.stack(eeg_mat)
+
     ''' dealing with huge spikes in the data'''
+    valid_e_idx = []
+    for i in range(len(eeg_mat)):
+        if np.abs(eeg_mat[i]).max() < 130 : 
+            valid_e_idx.append(i)
+        # else:
+            ''' plot eeg signal in freq domain '''
+            # xf = np.fft.rfftfreq(eeg_mat.shape[1], d=1.0/640.0) # up to nyquist freq: 1/2*640
+            # yf = np.zeros_like(xf)
+            # for i in range(len(eeg_mat)):
+            #     for j in range(eeg_mat.shape[-1]):
+            #         tmp = eeg_mat[i, :, j]
+            #         yf += np.abs(np.fft.rfft(tmp) / len(tmp))
+
+            # yf /= (eeg_mat.shape[0]*eeg_mat.shape[-1])
+            # plt.plot(xf, yf)
+            # plt.show()
+            # highest_f_component = xf[np.where(yf == max(yf))[0][0]]
+            # print('most eeg f:', highest_f_component, 'Hz, aka 1/', 1/highest_f_component, 's')
+            
+            # ipdb.set_trace()
+            '''band pass filter eeg with 50 hz threshold'''
+            # cutoff = 50
+            # for j in range(eeg_mat.shape[-1]):
+            #     eeg_mat[i,:,j] = butter_lowpass_filter(eeg_mat[i,:,j], cutoff, 640)
+            
+            # for j in range(eeg_mat.shape[-1]):
+            #     plt.plot(eeg_mat[i,:,j])
+            # plt.show()
+    
     # fmri: frames at the beginning always have large spikes, so remove the first 5 frames
     f_remove = 5 # number of frames to be removed at the beginning
     fmri_mat = fmri_mat[:, f_remove:-1, :] # keep the frame number mod 5 == 0
@@ -457,11 +487,15 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     for i in range(len(fmri_mat)):
         if np.abs(fmri_mat[i]).max() < 6 : 
             valid_f_idx.append(i)
-    fmri_mat = fmri_mat[valid_f_idx]
+
+    # combining valid eeg index and valid fmri index
+    valid_idx = list(set(valid_e_idx) & set(valid_f_idx))
+    # only keep valid ones
+    fmri_mat = fmri_mat[valid_idx]
     # remove corresponding adj
-    adjs = [adjs[i] for i in valid_f_idx]
+    adjs = [adjs[i] for i in valid_idx]
     # remove EEG frames corresponds to removed fmri ones & only keep those sessions have valid fmri
-    eeg_mat = eeg_mat[valid_f_idx, int(F_t*f_remove):int(F_t*(fmri_mat.shape[1]+f_remove)), :]
+    eeg_mat = eeg_mat[valid_idx, int(F_t*f_remove):int(F_t*(fmri_mat.shape[1]+f_remove)), :]
 
     region_assignment = get_region_assignment(num_region) #{EEG_electrodes: brain region}
 
@@ -626,7 +660,6 @@ def metric(pred, real):
 def butter_lowpass_filter(data, cutoff, fs, order=6):
     nyq = 0.5*fs
     normal_cutoff = cutoff / nyq
-
     # z,p,k = butter(order, normal_cutoff, output="zpk", btype='low', analog=False)
     # lesos = zpk2sos(z, p, k)
     # y = sosfilt(lesos, data)

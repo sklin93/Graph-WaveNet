@@ -17,6 +17,19 @@ def MSPELoss(yhat,y):
 #     def forward(self, pred, actual):
 #         return self.mse(torch.log(pred + 1), torch.log(actual + 1))
 
+def weighted_mse(preds, labels, null_val=np.nan):
+    # assign more weights to further away points (preds:[16, 10, 200])
+    num_t = preds.shape[1]
+    wts = (torch.arange(num_t) + 1.0) / (torch.arange(num_t) + 1.0).sum()
+
+    loss = (preds-labels)**2
+    loss = torch.mean(loss, [0,2])
+
+    wts = wts.to(loss.device)
+    loss = loss * wts
+    
+    return torch.mean(loss)
+
 class Regress_Loss_1(torch.nn.Module):
     
     def __init__(self):
@@ -117,8 +130,9 @@ class trainer():
         # self.optimizer = torch.optim.SGD(self.model.parameters(), lr=lrate, weight_decay=wdecay)
         # self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lrate, weight_decay=wdecay)
         # self.loss = util.masked_mae #util.masked_mse
-        self.loss = nn.L1Loss()
-        # self.loss = nn.MSELoss() # MSELoss
+        # self.loss = nn.L1Loss()
+        self.loss = nn.MSELoss() # MSELoss
+        # self.loss = weighted_mse
         # self.loss = nn.SmoothL1Loss() # HuberLoss
         # self.loss = nn.CosineEmbeddingLoss()
         self.loss2 = Regress_Loss_1()

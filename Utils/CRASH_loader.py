@@ -142,44 +142,47 @@ def get_eeg(comn_ids):
         for sess_dir in sess_dirs:
             # cur_sess_num = int(sess_dir.split(os.path.sep)[-1].split('-')[-1])
             cur_sess_num = int(sess_dir.split(os.path.sep)[-1].split('-')[-1].split('_')[0][1:])
-            data = loadmat(os.path.join(sess_dir, 'eeg', 'data.mat'))['data']
-            eeg_data[_subj][cur_sess_num] = data
-            # loc_mat = loadmat(os.path.join(sess_dir, 'eeg', 'loc.mat'))['loc']
-            # loc = {}
-            # for i in range(len(loc_mat)):
-            #     for field in loc_mat[i]._fieldnames:
-            #         if field not in loc:
-            #             loc[field] = []
-            #         loc[field].append(loc_mat[i].__dict__[field])
-            # if loc_set:
-            #     for k in loc_param:
-            #         if len(loc[k]) != len(common_loc[k]):
-            #             print('no way???!!!')
-            #             ipdb.set_trace()
-            #         for j in range(len(loc[k])):
-            #             if loc[k][j] != common_loc[k][j]:
-            #                 if loc[k][j].size > 0:
-            #                     print('loc mismatch!')
-            #                     ipdb.set_trace()
-            # else:
-            #     for k in loc_param:
-            #         common_loc[k] = loc[k]
-            #     loc_set = True
+            try:
+                data = loadmat(os.path.join(sess_dir, 'eeg', 'data.mat'))['data']
+                eeg_data[_subj][cur_sess_num] = data
+                # loc_mat = loadmat(os.path.join(sess_dir, 'eeg', 'loc.mat'))['loc']
+                # loc = {}
+                # for i in range(len(loc_mat)):
+                #     for field in loc_mat[i]._fieldnames:
+                #         if field not in loc:
+                #             loc[field] = []
+                #         loc[field].append(loc_mat[i].__dict__[field])
+                # if loc_set:
+                #     for k in loc_param:
+                #         if len(loc[k]) != len(common_loc[k]):
+                #             print('no way???!!!')
+                #             ipdb.set_trace()
+                #         for j in range(len(loc[k])):
+                #             if loc[k][j] != common_loc[k][j]:
+                #                 if loc[k][j].size > 0:
+                #                     print('loc mismatch!')
+                #                     ipdb.set_trace()
+                # else:
+                #     for k in loc_param:
+                #         common_loc[k] = loc[k]
+                #     loc_set = True
 
-            '''
-            After finding out there's only 1 common frequency: only store sequence length
-            ---> Actually no need, data.shape[1] is the seq_len
-            '''
-            # time = loadmat(os.path.join(sess_dir, 'eeg', 'time.mat'))['time']
-            # if checkIsAP(time):
-            #     f = 1000 / (time[1] - time[0])
-            # if not f_set:
-            #     common_f = f
-            #     f_set = True
-            # else:
-            #     if f != common_f:
-            #         print('frequency mismatch!')
-            # eeg_data[_subj][cur_sess_num]['seq_len'] = len(time) #mostly 189282
+                '''
+                After finding out there's only 1 common frequency: only store sequence length
+                ---> Actually no need, data.shape[1] is the seq_len
+                '''
+                # time = loadmat(os.path.join(sess_dir, 'eeg', 'time.mat'))['time']
+                # if checkIsAP(time):
+                #     f = 1000 / (time[1] - time[0])
+                # if not f_set:
+                #     common_f = f
+                #     f_set = True
+                # else:
+                #     if f != common_f:
+                #         print('frequency mismatch!')
+                # eeg_data[_subj][cur_sess_num]['seq_len'] = len(time) #mostly 189282
+            except FileNotFoundError:
+                pass
 
     return eeg_data
 

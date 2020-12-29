@@ -382,7 +382,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     '''
 
     comn_ids = get_comn_ids()
-    # comn_ids = ['1041h'] # only using one subj's data 1043f
+    comn_ids = ['1041h'] # only using one subj's data 1043f
     print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 
@@ -469,7 +469,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
             # print('most eeg f:', highest_f_component, 'Hz, aka 1/', 1/highest_f_component, 's')
             
             # ipdb.set_trace()
-            '''band pass filter eeg with 50 hz threshold'''
+            ''' low pass filter eeg with 50 hz threshold'''
             # cutoff = 50
             # for j in range(eeg_mat.shape[-1]):
             #     eeg_mat[i,:,j] = butter_lowpass_filter(eeg_mat[i,:,j], cutoff, 640)

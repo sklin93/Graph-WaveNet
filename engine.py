@@ -306,16 +306,15 @@ class trainer():
             F = output.squeeze()
         else:
             if self.meta is None:
-                F = output[0].squeeze()
-                E = output[1].squeeze()
+                E = output.squeeze()
             else: # with scattering
                 E = output[0].squeeze()
                 predict = output[1].squeeze()
 
         ##### loss #####
         if self.meta is None:
-            real_F = real_F.to(self.device).squeeze()
             if self.F_only:
+                real_F = real_F.to(self.device).squeeze()
                 # plt.plot(F[0,0].detach().cpu().numpy())
                 # plt.plot(F[0,1].detach().cpu().numpy())
                 # plt.show()
@@ -560,24 +559,27 @@ class trainer():
             F = output.squeeze()
         else:
             if self.meta is None:
-                F = output[0].squeeze()
-                E = output[1].squeeze()
+                E = output.squeeze()
             else: # with scattering
                 E = output[0].squeeze()
                 predict = output[1].squeeze()
 
         ##### loss #####
         if self.meta is None:
-            real_F = real_F.to(self.device).squeeze()
             if viz:
+                ipdb.set_trace()
                 plt.figure('pred')
                 for j in range(10):
                     plt.plot(F[0,:,j].cpu().numpy())
                 plt.figure('gt')
                 for j in range(10):
-                    plt.plot(real_F[0,:,j].cpu().numpy())
+                    if real_F:
+                        plt.plot(real_F[0,:,j].cpu().numpy())
+                    if real_E:
+                        plt.plot(real_E[0,:,j].cpu().numpy())
                 plt.show()            
             if self.F_only:
+                real_F = real_F.to(self.device).squeeze()
                 loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()

@@ -124,7 +124,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 # _G = nx.gnp_random_graph(n, p)
                 adj_mx[i] = util.mod_adj(nx.to_numpy_matrix(_G), args.adjtype)
         
-
         ''' plot fmri signal in freq domain '''
         '''
         xf = np.fft.rfftfreq(fmri_mat.shape[1], d=0.91) # up to nyquist freq: 1/2*(1/0.91)
@@ -141,7 +140,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         print('most fMRI f:', highest_f_component, 'Hz, aka 1/', 1/highest_f_component, 's')
         '''
 
-        #  band pass filter fMRI with 0.2 hz threshold
+        # low pass filter fMRI with 0.2 hz threshold
         cutoff = 0.2 #(1/0.91)/(2*3)
         for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 320, 200)
             for j in range(fmri_mat.shape[-1]):
@@ -160,8 +159,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
                             eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
             assert len(F_idxer) == len(E_idxer)
+
+            ''' low pass filter eeg with 50 hz threshold'''
+            cutoff = 50
+            for i in range(len(eeg_mat)):
+                for j in range(eeg_mat.shape[-1]):
+                    eeg_mat[i,:,j] = util.butter_lowpass_filter(eeg_mat[i,:,j], cutoff, 640)
+
             eeg_mat = eeg_mat[:, E_idxer, :]
-            eeg_mat.reshape(-1, *eeg_mat.shape[2:])
+            eeg_mat = eeg_mat.reshape(-1, *eeg_mat.shape[2:])
 
             nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
                                             proc_helper(fmri_mat, eeg_mat, len(adj_mx))
@@ -342,8 +348,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             else:
                 adjinit['train'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[:nTrain]]) 
                 ipdb.set_trace()# TODO: adjinit['train'] need to be shuffled with train set
-                adjinit['train'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[nTrain:-nTest]])
-                adjinit['val'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[-nTest:]])
+                adjinit['val'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[nTrain:-nTest]])
+                adjinit['test'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[-nTest:]])
 
             if args.aptonly:
                 supports = None
@@ -414,7 +420,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     else:
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
-                    metrics = engine.train_CRASH(_x, _y, None, region_assignment, _adj_idx)
+                    if F_only:
+                        metrics = engine.train_CRASH(_x, _y, None, region_assignment, _adj_idx)
+                    else:
+                        metrics = engine.train_CRASH(_x, None, _y, region_assignment, _adj_idx)
 
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])
@@ -458,10 +467,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
                     if batch_i == 0: # only viz the first one
-                        metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx, viz=False)
+                        if F_only:
+                            metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx, viz=False)
+                        else:
+                            metrics = engine.eval_CRASH(_x, None, _y, region_assignment, _adj_idx, viz=False)
                     else:
-                        metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx)                            
-
+                        if F_only:
+                            metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx)
+                        else:
+                            metrics = engine.eval_CRASH(_x, None, _y, region_assignment, _adj_idx)
                     valid_loss.append(metrics[0])
                     valid_mae.append(metrics[1])
                     valid_mape.append(metrics[2])
@@ -1133,6 +1147,8 @@ if __name__ == "__main__":
     t1 = time.time()
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
-    main(scatter=False, _map=False, F_only=True)
+
+    # main(scatter=False, _map=False, F_only=True) # F prediction
+    main(scatter=False, _map=True, F_only=False)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

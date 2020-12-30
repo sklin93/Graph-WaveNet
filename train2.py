@@ -10,12 +10,11 @@ import matplotlib.pyplot as plt
 import pickle
 import os
 import glob
-from sklearn.preprocessing import RobustScaler
+# from sklearn.preprocessing import RobustScaler, StandardScaler
 from sklearn.utils import shuffle
 from kymatio.numpy import Scattering1D
-import networkx as nx
 import ipdb
-
+from tqdm import tqdm
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --num_nodes 207 --seq_length 12 --save ./garage/metr
 # python train.py --gcn_bool --adjtype normlap --addaptadj --num_nodes 80 --data syn --blocks 2 --layers 2 --in_dim=1 --batch_size 32 --learning_rate 0.00005 --weight_decay 0.0001 --epochs 200
 # python train.py --gcn_bool --adjtype doubletransition --addaptadj  --randomadj --data CRASH --num_nodes 200 --seq_length 2912 --in_dim 1 --blocks 2 --layers 2 --batch_size 16 --learning_rate 0.0005 --weight_decay 0.011 --save ./garage/CRASH
@@ -71,13 +70,14 @@ def signaltonoise(a, axis=0, ddof=0):
     sd = a.std(axis=axis, ddof=ddof)
     return np.where(sd == 0, 0, m/sd)
 
-def proc_helper(a, b, len_adj):
+def proc_helper(a, b, len_adj, no_scaler=False):
     assert len(a) == len(b), 'input length do not match'
+    assert len(a) % len_adj == 0
+
     # deal with adj_mx repetitions (using idx)
     adj_mx_idx = np.arange(len_adj).repeat(len(a)//len_adj)
     # shuffle for mixing different subjects' image
     adj_mx_idx, a, b = shuffle(adj_mx_idx, a, b, random_state = 0)
-
     # train-val-test split
     num_total = len(a)
     nTrain = round(0.7 * num_total)
@@ -85,13 +85,27 @@ def proc_helper(a, b, len_adj):
     nTest = num_total - nTrain - nValid
     print('Train, Val, Test numbers:', nTrain, nValid, nTest)
 
-    # scaler
-    scaler_a = util.StandardScaler(mean=a[:nTrain].mean(), 
-                                    std=a[:nTrain].std())
-    a = scaler_a.transform(a)
-    scaler_b = util.StandardScaler(mean=b[:nTrain].mean(), 
-                                    std=b[:nTrain].std())
-    b = scaler_b.transform(b) ### ??? different modality has some problem here..when both needs an individual scaler
+    if no_scaler:
+        return nTrain, nValid, nTest, a, b, None, None, adj_mx_idx
+    
+    # # overall scaler
+    # scaler_a = util.StandardScaler(mean=a[:nTrain].mean(), std=a[:nTrain].std())
+    # scaler_b = util.StandardScaler(mean=b[:nTrain].mean(), std=b[:nTrain].std())
+    # a = scaler_a.transform(a)
+    # b = scaler_b.transform(b) ### ??? different modality has some problem here..when both needs an individual scaler
+    
+    # # per-feature standardization using sklearn
+    # scaler_a = StandardScaler()
+    # scaler_a.fit(a[:nTrain].reshape(-1, a.shape[-1]))
+    # scaler_b = StandardScaler()
+    # scaler_b.fit(b[:nTrain].reshape(-1, b.shape[-1]))
+
+    # per-feature standardization
+    scaler_a = util.StandardScaler(a.mean((0,1)), a.std((0,1)))
+    scaler_b = util.StandardScaler(b.mean((0,1)), b.std((0,1)))
+    
+    a = scaler_a.transform(a.reshape(-1, a.shape[-1])).reshape(a.shape)
+    b = scaler_b.transform(b.reshape(-1, b.shape[-1])).reshape(b.shape)
     return nTrain, nValid, nTest, a, b, scaler_a, scaler_b, adj_mx_idx
   
 def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl', 
@@ -106,13 +120,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
     device = torch.device(args.device)
 
     if args.data == 'CRASH':
+        basic_len = 1456 # hard-coded (if no subsample, use 2912)
         adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-
-        basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
-        assert int(args.seq_length % basic_len) == 0
-        offset = args.seq_length // basic_len
+        if subsample:
+            F_t /= subsample
+        K = int(args.seq_length / F_t)
+        print('fMRI signal length in input-output pairs:', K)
 
         if False:
+            import networkx as nx
             ## randomize SC entries to see the sensitivity to SC
             # use completely random SC w/ same level of sparsity
             n = args.num_nodes # number of nodes
@@ -146,33 +162,52 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             for j in range(fmri_mat.shape[-1]):
                 fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 1/0.91)
 
-        K = int(args.seq_length / F_t)
         F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
                                                     int(basic_len/F_t))[:, None]
+        # pkl_data = {'fmri_mat': fmri_mat}
+        # with open('fmri_mat_filtered.pkl', 'wb') as handle:
+        #         pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
         fmri_mat = fmri_mat[:, F_idxer,:]
-        sample_per_suj = len(F_idxer) - offset
-        print('sample per subj', sample_per_suj)
 
         if _map: # for signal mapping
             fmri_mat = fmri_mat.reshape(-1, *fmri_mat.shape[2:])
-
-            E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
-                            eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
-            assert len(F_idxer) == len(E_idxer)
 
             ''' low pass filter eeg with 50 hz threshold'''
             cutoff = 50
             for i in range(len(eeg_mat)):
                 for j in range(eeg_mat.shape[-1]):
                     eeg_mat[i,:,j] = util.butter_lowpass_filter(eeg_mat[i,:,j], cutoff, 640)
+            ''' subsample eeg
+            since useful info is < 50Hz, as long as sample f > 100Hz we can keep all the info
+            640/6 > 100, so doing 1/6 subsample
+            '''
+            if subsample:
+                eeg_mat = eeg_mat[:,::subsample,:]
+
+            E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
+                            eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
+            assert len(F_idxer) == len(E_idxer)
 
             eeg_mat = eeg_mat[:, E_idxer, :]
             eeg_mat = eeg_mat.reshape(-1, *eeg_mat.shape[2:])
 
             nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
-                                            proc_helper(fmri_mat, eeg_mat, len(adj_mx))
-        
+                                proc_helper(fmri_mat, eeg_mat, len(adj_mx))
+            del fmri_mat, eeg_mat
+            # min-max normalization
+            _input = (_input - _input.min()) / (_input.max() - _input.min())
+            _gt = (_gt - _gt.min()) / (_gt.max() - _gt.min())        
+            # _input = _input / np.max(np.abs(_input))
+            # _gt = _gt / np.max(np.abs(_gt))
+
         else: # for fmri signal predictions
+            basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
+            assert int(args.seq_length % basic_len) == 0
+            offset = args.seq_length // basic_len
+
+            sample_per_suj = len(F_idxer) - offset
+            print('sample per subj', sample_per_suj)
+
             fmri_mat_x = fmri_mat[:,:-offset]
             fmri_mat_y = fmri_mat[:,offset:]
 
@@ -181,13 +216,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
             nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
                                         proc_helper(fmri_mat_x, fmri_mat_y, len(adj_mx))
-
-        # # Min-max normalization
-        # _input = (_input - _input.min()) / (_input.max() - _input.min())
-        # _gt = (_gt - _gt.min()) / (_gt.max() - _gt.min())
-
-        # fmri_mat = fmri_mat / np.max(np.abs(fmri_mat))
-        # eeg_mat = eeg_mat / np.max(np.abs(eeg_mat))
+            del fmri_mat_x, fmri_mat_y
 
         '''
         print('eeg_mat min max:', eeg_mat.min(), eeg_mat.max())
@@ -225,31 +254,41 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         print('filtered eeg min max:', eeg_mat.min(), eeg_mat.max())
         '''
         
-        # region_assignment: {EEG_electrodes: brain region}
-        inv_mapping = {} #{brain region: EEG_electrodes}
-        for k, v in region_assignment.items():
-            for _v in v:
-                if _v not in inv_mapping:
-                    inv_mapping[_v] = []
-                inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
+        # # region_assignment: {EEG_electrodes: brain region}
+        # inv_mapping = {} #{brain region: EEG_electrodes}
+        # for k, v in region_assignment.items():
+        #     for _v in v:
+        #         if _v not in inv_mapping:
+        #             inv_mapping[_v] = []
+        #         inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
+        region_assignment = None
 
         if scatter:
             # wavelet consts J=3 & Q=8
-            J = 3 # or smaller
-            Q = 9 # or smaller
+            J = 3
+            Q = 9
             print(1+J*Q+J*(J-1)*Q/2, 1000/(2**J))
-            scattering = Scattering1D(J, args.seq_length, Q) 
+            scattering = Scattering1D(J, args.seq_length, Q)
             # scattering = Scattering1D(J, 1000, Q) # predict shorter
             meta = scattering.meta()
             order0 = np.where(meta['order'] == 0) #1*45
             order1 = np.where(meta['order'] == 1) #13*45
             order2 = np.where(meta['order'] == 2) #28*45
-            # load wavelet coefficient scalers
-            with open('coeffs_scaler.pkl', 'rb') as handle:
-                coeffs_scaler = pickle.load(handle)
-            # for transform: make it into same shape as y_E
-            mean = np.tile(coeffs_scaler['means'][None, None, ...], (args.batch_size, 61, 1, 1))
-            std = np.tile(coeffs_scaler['stds'][None, None, ...], (args.batch_size, 61, 1, 1))
+
+            ipdb.set_trace()
+            coeffs = []
+            for i in range(len(_gt)):
+                coeffs.append(scattering(_gt[i].transpose(1,0)))
+            coeffs = np.stack(coeffs)
+            ipdb.set_trace()
+            # # load wavelet coefficient scalers
+            # with open('coeffs_scaler.pkl', 'rb') as handle:
+            #     coeffs_scaler = pickle.load(handle)
+            
+            # ipdb.set_trace()
+            # # for transform: make it into same shape as y_E
+            # mean = np.tile(coeffs_scaler['means'][None, None, ...], (args.batch_size, 61, 1, 1))
+            # std = np.tile(coeffs_scaler['stds'][None, None, ...], (args.batch_size, 61, 1, 1))
 
     elif args.data == 'syn':
         if  os.path.isfile(syn_file):
@@ -277,6 +316,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         if True: #False
+            import networkx as nx
             ## randomize SC entries to see the sensitivity to SC
             # use completely random SC w/ same level of sparsity
             n = args.num_nodes # number of nodes
@@ -355,18 +395,19 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 supports = None
 
         if scatter:
-            engine = trainer(coeffs_scaler, args.in_dim, args.seq_length, args.num_nodes, 
+            engine = trainer([scaler_in,scaler_out], args.in_dim, args.seq_length, args.num_nodes, 
+            # engine = trainer(coeffs_scaler, args.in_dim, args.seq_length, args.num_nodes, 
             # engine = trainer(coeffs_scaler, args.in_dim, 1000, args.num_nodes, # predict shorter
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
-                             args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
+                             args.blocks, args.layers, out_nodes=_gt.shape[-1], F_t=F_t,
                              meta=[order0[0],order1[0],order2[0]],scatter=True, F_only=F_only, 
                              batch_size=args.batch_size)
         else:
             engine = trainer([scaler_in,scaler_out], args.in_dim, args.seq_length, args.num_nodes,
                              args.nhid, args.dropout, args.learning_rate, args.weight_decay, device, 
                              supports, args.gcn_bool, args.addaptadj, adjinit, args.kernel_size,
-                             args.blocks, args.layers, out_nodes=eeg_mat.shape[-1], F_t=F_t,
+                             args.blocks, args.layers, out_nodes=_gt.shape[-1], F_t=F_t,
                              subsample=subsample, F_only=F_only, batch_size=args.batch_size)
 
         if model_name is None or finetune is True:
@@ -411,7 +452,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
                     if scatter:
-                        ipdb.set_trace()
                         _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         coeff_y = scattering(_y.transpose(0,2,1))
                         _y = torch.Tensor(_y).to(device)
@@ -457,7 +497,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
                     if scatter:
-                        ipdb.set_trace()
                         _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                         coeff_y = scattering(_y.transpose(0,2,1))
                         _y = torch.Tensor(_y).to(device)
@@ -846,7 +885,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
             _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
             if scatter:
-                ipdb.set_trace()
                 _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                 coeff_y = scattering(_y.transpose(0,2,1))
                 _y = torch.Tensor(_y).to(device)
@@ -856,17 +894,24 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
             if batch_i == 0: # only viz the first one
-                metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx, viz=True)
+                if F_only:
+                    metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx, viz=True)
+                else:
+                    metrics = engine.eval_CRASH(_x, None, _y, region_assignment, _adj_idx, viz=True)
             else:
-                metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx) 
-
+                if F_only:
+                    metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx)
+                else:
+                    metrics = engine.eval_CRASH(_x, None, _y, region_assignment, _adj_idx)
 
             amae.append(metrics[1])
             amape.append(metrics[2])
             armse.append(metrics[3])
 
-            real_Fs.append(_y)
-            real_Es.append(None)
+            if F_only:
+                real_Fs.append(_y)
+            else:
+                real_Es.append(_y)
             pred_Fs.append(metrics[-3])
             pred_Es.append(metrics[-2])
             pred_coeffs.append(metrics[-1])
@@ -904,6 +949,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         plt.legend()
                         plt.show()
                     else:
+                        ipdb.set_trace()
                         plt.figure()
                         plt.plot(real_Es[0].squeeze().cpu().numpy()[0,0], label='real Es')
                         plt.plot(pred_Es[0].squeeze().cpu().numpy()[0,0], label='pred Es')
@@ -1149,6 +1195,6 @@ if __name__ == "__main__":
     # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
 
     # main(scatter=False, _map=False, F_only=True) # F prediction
-    main(scatter=False, _map=True, F_only=False)
+    main(scatter=True, _map=True, F_only=False, subsample=6)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

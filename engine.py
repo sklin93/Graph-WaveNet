@@ -324,13 +324,12 @@ class trainer():
                 loss = self.loss(E, real_E) #+ self.loss(F, real_F)
 
         else: # with scattering
-            ipdb.set_trace()
             # loss = self.loss(E, real_E[0], 0.0) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:], 0.0)\
                     # + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:], 0.0)
             loss = 0.5*self.loss(E, real_E[0]) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
-                    + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])\
-                   + 0.5*self.loss2(E, real_E[0]) + self.loss2(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
-                    + 0.5 * self.loss2(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])
+                    + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])#\
+                   # + 0.5*self.loss2(E, real_E[0]) + self.loss2(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
+                   #  + 0.5 * self.loss2(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])
 
         #########################
 
@@ -591,9 +590,9 @@ class trainer():
             # loss = self.loss(E, real_E[0], 0.0) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:], 0.0)\
                     # + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:], 0.0)
             loss = 0.5*self.loss(E, real_E[0]) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
-                    + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])\
-                   + 0.5*self.loss2(E, real_E[0]) + self.loss2(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
-                    + 0.5 * self.loss2(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])
+                    + 0.5 * self.loss(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])#\
+                   # + 0.5*self.loss2(E, real_E[0]) + self.loss2(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:])\
+                   #  + 0.5 * self.loss2(predict[...,self.meta[1],:], real_E[1].squeeze()[...,self.meta[1],:])
         #########################
 
         ##### metrics #####
@@ -601,7 +600,7 @@ class trainer():
             mae = util.masked_mae(E,real_E[0],0).item()
             mape = util.masked_mape(E,real_E[0],0).item()
             rmse = util.masked_rmse(E,real_E[0],0).item()
-            
+            cc, _, _ = util.get_cc(E, real_E[0])
         else:
             if self.F_only:      
                 mae = util.masked_mae(F,real_F,0).item()

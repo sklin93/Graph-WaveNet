@@ -121,9 +121,9 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
     if args.data == 'CRASH':
         basic_len = 1456 # hard-coded (if no subsample, use 2912)
-        
+        CRASH_fname = 'CRASH_FE_filtered_subsampled.pkl'
         try:
-            with open('CRASH_FE_filtered_subsampled.pkl', 'rb') as handle:
+            with open(CRASH_fname, 'rb') as handle:
                 F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, \
                 inv_mapping, region_assignment, nTrain, nValid, \
                 nTest, scaler_in, scaler_out = pickle.load(handle)
@@ -250,7 +250,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 pkl_data = (F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, 
                             inv_mapping, region_assignment, nTrain, nValid, 
                             nTest, scaler_in, scaler_out)
-                with open('CRASH_filtered_subsampled.pkl', 'wb') as handle:
+                with open(CRASH_fname, 'wb') as handle:
                     pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
             # # load wavelet coefficient scalers
             # with open('coeffs_scaler.pkl', 'rb') as handle:
@@ -433,7 +433,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
                         coeff_y  = torch.Tensor(_coeffs[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
-                        _y = [_y, coeff_y]
+                        _y = [_y.transpose(1,2), coeff_y]
                     else:
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
@@ -482,7 +482,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
                         coeff_y  = torch.Tensor(_coeffs[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
-                        _y = [_y, coeff_y]
+                        _y = [_y.transpose(1,2), coeff_y]
                     else:
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 
@@ -874,7 +874,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
                 coeff_y  = torch.Tensor(_coeffs[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
                 
-                _y = [_y, coeff_y]
+                _y = [_y.transpose(1,2), coeff_y]
             else:
                 _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
 

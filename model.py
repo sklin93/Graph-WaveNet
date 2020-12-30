@@ -644,10 +644,9 @@ class gwnet_diff_G(nn.Module):
             sig = x.transpose(2,3).contiguous()
 
             # ### temporal transConv
-            # x = x[...,:self.out_dim]          
+            # x = x[...,:self.out_dim]        
             # x = x.transpose(1, 2)
             # sig = self.end_mlp_e(x)
-            ipdb.set_trace()
             return sig, self.scattering(sig)#[:,:,:,self.meta[1]] # order0 only
 
 

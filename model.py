@@ -618,8 +618,8 @@ class gwnet_diff_G(nn.Module):
             for j in range(10):
                 plt.plot(x.detach().cpu().numpy()[0,:,j,0])
             plt.show()
+        
         if self.meta is None:
-            
             # ### F prediction
             # x_f = self.end_mlp_f(x).transpose(1,3)
 
@@ -638,7 +638,7 @@ class gwnet_diff_G(nn.Module):
             return x1#, x2, x3
 
         else: # scatter (skip: [16, 256, 200, 1])
-            # x = self.end_module_add(x) #[`batch_size, out_length, num_nodes, 1]
+            x = self.end_module_add(x) #[`batch_size, out_length, num_nodes, 1]
             x = x.transpose(1, 2)
             x = self.end_mlp_e(x)
             sig = x.transpose(2,3).contiguous()

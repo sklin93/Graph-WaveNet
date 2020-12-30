@@ -81,12 +81,8 @@ class trainer():
                     out_dim = out_dim_f #subsampled E
                 else:
                     out_dim = seq_length #original E
-            else: #wavelet scattered E
-                if scatter:
-                    out_dim = seq_length
-                else:
-                    # out_dim = 1890 # real data 
-                    out_dim = 30 # syn
+            else:
+                out_dim = seq_length
 
             if F_only:
                 self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, supports_len, batch_size,

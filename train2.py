@@ -121,147 +121,113 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
     if args.data == 'CRASH':
         basic_len = 1456 # hard-coded (if no subsample, use 2912)
-        adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-        if subsample:
-            F_t /= subsample
-        K = int(args.seq_length / F_t)
-        print('fMRI signal length in input-output pairs:', K)
-
-        if False:
-            import networkx as nx
-            ## randomize SC entries to see the sensitivity to SC
-            # use completely random SC w/ same level of sparsity
-            n = args.num_nodes # number of nodes
-            p = np.count_nonzero(adj_mx[0][0]) / (n*(n-1)/2) # probability for edge creation
-            _G = nx.gnp_random_graph(n, p)
-            # _G = nx.newman_watts_strogatz_graph(n,5,p)
-            # _G = nx.gnm_random_graph(n, np.count_nonzero(adj_mx[0][0]))
-            for i in range(len(adj_mx)):
-                # _G = nx.gnp_random_graph(n, p)
-                adj_mx[i] = util.mod_adj(nx.to_numpy_matrix(_G), args.adjtype)
         
-        ''' plot fmri signal in freq domain '''
-        '''
-        xf = np.fft.rfftfreq(fmri_mat.shape[1], d=0.91) # up to nyquist freq: 1/2*(1/0.91)
-        yf = np.zeros_like(xf)
-        for i in range(len(fmri_mat)):
-            for j in range(fmri_mat.shape[-1]):
-                tmp = fmri_mat[i, :, j]
-                yf += np.abs(np.fft.rfft(tmp) / len(tmp))
-                
-        yf /= (fmri_mat.shape[0]*fmri_mat.shape[-1])
-        plt.plot(xf, yf)
-        plt.show()
-        highest_f_component = xf[np.where(yf == max(yf))[0][0]]
-        print('most fMRI f:', highest_f_component, 'Hz, aka 1/', 1/highest_f_component, 's')
-        '''
-
-        # low pass filter fMRI with 0.2 hz threshold
-        cutoff = 0.2 #(1/0.91)/(2*3)
-        for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 320, 200)
-            for j in range(fmri_mat.shape[-1]):
-                fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 1/0.91)
-
-        F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
-                                                    int(basic_len/F_t))[:, None]
-        # pkl_data = {'fmri_mat': fmri_mat}
-        # with open('fmri_mat_filtered.pkl', 'wb') as handle:
-        #         pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
-        fmri_mat = fmri_mat[:, F_idxer,:]
-
-        if _map: # for signal mapping
-            fmri_mat = fmri_mat.reshape(-1, *fmri_mat.shape[2:])
-
-            ''' low pass filter eeg with 50 hz threshold'''
-            cutoff = 50
-            for i in range(len(eeg_mat)):
-                for j in range(eeg_mat.shape[-1]):
-                    eeg_mat[i,:,j] = util.butter_lowpass_filter(eeg_mat[i,:,j], cutoff, 640)
-            ''' subsample eeg
-            since useful info is < 50Hz, as long as sample f > 100Hz we can keep all the info
-            640/6 > 100, so doing 1/6 subsample
-            '''
+        try:
+            with open('CRASH_FE_filtered_subsampled.pkl', 'rb') as handle:
+                F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, \
+                inv_mapping, region_assignment, nTrain, nValid, \
+                nTest, scaler_in, scaler_out = pickle.load(handle)
+        except:
+            adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
+            
             if subsample:
-                eeg_mat = eeg_mat[:,::subsample,:]
+                F_t /= subsample
+            K = int(args.seq_length / F_t)
+            print('fMRI signal length in input-output pairs:', K)
 
-            E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
-                            eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
-            assert len(F_idxer) == len(E_idxer)
+            if False:
+                import networkx as nx
+                ## randomize SC entries to see the sensitivity to SC
+                # use completely random SC w/ same level of sparsity
+                n = args.num_nodes # number of nodes
+                p = np.count_nonzero(adj_mx[0][0]) / (n*(n-1)/2) # probability for edge creation
+                _G = nx.gnp_random_graph(n, p)
+                # _G = nx.newman_watts_strogatz_graph(n,5,p)
+                # _G = nx.gnm_random_graph(n, np.count_nonzero(adj_mx[0][0]))
+                for i in range(len(adj_mx)):
+                    # _G = nx.gnp_random_graph(n, p)
+                    adj_mx[i] = util.mod_adj(nx.to_numpy_matrix(_G), args.adjtype)
+            
+            ''' plot fmri signal in freq domain '''
+            # xf = np.fft.rfftfreq(fmri_mat.shape[1], d=0.91) # up to nyquist freq: 1/2*(1/0.91)
+            # yf = np.zeros_like(xf)
+            # for i in range(len(fmri_mat)):
+            #     for j in range(fmri_mat.shape[-1]):
+            #         tmp = fmri_mat[i, :, j]
+            #         yf += np.abs(np.fft.rfft(tmp) / len(tmp))
+                    
+            # yf /= (fmri_mat.shape[0]*fmri_mat.shape[-1])
+            # plt.plot(xf, yf)
+            # plt.show()
+            # highest_f_component = xf[np.where(yf == max(yf))[0][0]]
+            # print('most fMRI f:', highest_f_component, 'Hz, aka 1/', 1/highest_f_component, 's')
 
-            eeg_mat = eeg_mat[:, E_idxer, :]
-            eeg_mat = eeg_mat.reshape(-1, *eeg_mat.shape[2:])
+            ''' low pass filter fMRI with 0.2 hz threshold '''
+            cutoff = 0.2 #(1/0.91)/(2*3)
+            for i in range(fmri_mat.shape[0]): #fmri_mat: (n, 320, 200)
+                for j in range(fmri_mat.shape[-1]):
+                    fmri_mat[i,:,j] = util.butter_lowpass_filter(fmri_mat[i,:,j], cutoff, 1/0.91)
 
-            nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
-                                proc_helper(fmri_mat, eeg_mat, len(adj_mx))
-            del fmri_mat, eeg_mat
-            # min-max normalization
-            _input = (_input - _input.min()) / (_input.max() - _input.min())
-            _gt = (_gt - _gt.min()) / (_gt.max() - _gt.min())        
-            # _input = _input / np.max(np.abs(_input))
-            # _gt = _gt / np.max(np.abs(_gt))
+            F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
+                                                        int(basic_len/F_t))[:, None]
+            fmri_mat = fmri_mat[:, F_idxer,:]
 
-        else: # for fmri signal predictions
-            basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
-            assert int(args.seq_length % basic_len) == 0
-            offset = args.seq_length // basic_len
+            if _map: # for signal mapping
+                fmri_mat = fmri_mat.reshape(-1, *fmri_mat.shape[2:])
 
-            sample_per_suj = len(F_idxer) - offset
-            print('sample per subj', sample_per_suj)
+                ''' low pass filter eeg with 50 hz threshold'''
+                cutoff = 50
+                for i in range(len(eeg_mat)):
+                    for j in range(eeg_mat.shape[-1]):
+                        eeg_mat[i,:,j] = util.butter_lowpass_filter(eeg_mat[i,:,j], cutoff, 640)
+                ''' subsample eeg
+                since useful info is < 50Hz, as long as sample f > 100Hz we can keep all the info
+                640/6 > 100, so doing 1/6 subsample
+                '''
+                if subsample:
+                    eeg_mat = eeg_mat[:,::subsample,:]
 
-            fmri_mat_x = fmri_mat[:,:-offset]
-            fmri_mat_y = fmri_mat[:,offset:]
+                E_idxer = np.arange(args.seq_length)[None, :] + np.arange(0, 
+                                eeg_mat.shape[1] - args.seq_length + 1, basic_len)[:, None]
+                assert len(F_idxer) == len(E_idxer)
 
-            fmri_mat_x = fmri_mat_x.reshape(-1, *fmri_mat_x.shape[2:])
-            fmri_mat_y = fmri_mat_y.reshape(-1, *fmri_mat_y.shape[2:])
+                eeg_mat = eeg_mat[:, E_idxer, :]
+                eeg_mat = eeg_mat.reshape(-1, *eeg_mat.shape[2:])
 
-            nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
-                                        proc_helper(fmri_mat_x, fmri_mat_y, len(adj_mx))
-            del fmri_mat_x, fmri_mat_y
+                nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
+                                                proc_helper(fmri_mat, eeg_mat, len(adj_mx))
+                del fmri_mat, eeg_mat, F_idxer, E_idxer
+                # min-max normalization
+                _input = (_input - _input.min()) / (_input.max() - _input.min())
+                _gt = (_gt - _gt.min()) / (_gt.max() - _gt.min())        
+                # _input = _input / np.max(np.abs(_input))
+                # _gt = _gt / np.max(np.abs(_gt))
 
-        '''
-        print('eeg_mat min max:', eeg_mat.min(), eeg_mat.max())
-        # LPF of EEG data
-        filtered_eeg_fname = 'filtered_eeg_mat.npy'
-        if os.path.isfile(filtered_eeg_fname):
-            eeg_mat = np.load(filtered_eeg_fname)
-            print('filtered eeg loaded')
-        else:            
-            for sp in range(eeg_mat.shape[0]): # for every sample
-                print('\n', sp, end='')
-                for nd in range(eeg_mat.shape[-1]): # for every node
-                    print('.', end='')
-                    d = eeg_mat[sp, :, nd]
-                    power = np.abs(np.fft.fft(d))
-                    freq = np.fft.fftfreq(eeg_mat.shape[1], 1/640)
+            else: # for fmri signal predictions
+                basic_len = 2912 # hard-coded fot F_t 582.4, used as the sliding window stride to avoid float
+                assert int(args.seq_length % basic_len) == 0
+                offset = args.seq_length // basic_len
 
-                    # plt.figure()
-                    # plt.plot(freq, power)
-                    # plt.show()
+                sample_per_suj = len(F_idxer) - offset
+                print('sample per subj', sample_per_suj)
 
-                    # want to subsample to 1/0.91 Hz (same as fMRI)
-                    # need to filter out frequencies above nyquist rate (half that)
-                    cutoff = (1/0.91)/2
-                    filtered_sig = util.butter_lowpass_filter(d, cutoff, 640)
+                fmri_mat_x = fmri_mat[:,:-offset]
+                fmri_mat_y = fmri_mat[:,offset:]
 
-                    # plt.figure()
-                    # plt.plot(d)
-                    # plt.plot(filtered_sig)
-                    # plt.show()
+                fmri_mat_x = fmri_mat_x.reshape(-1, *fmri_mat_x.shape[2:])
+                fmri_mat_y = fmri_mat_y.reshape(-1, *fmri_mat_y.shape[2:])
 
-                    # replace original signal with filtered signal
-                    eeg_mat[sp, :, nd] = filtered_sig
-            np.save(filtered_eeg_fname, eeg_mat)
-        print('filtered eeg min max:', eeg_mat.min(), eeg_mat.max())
-        '''
-        
-        # # region_assignment: {EEG_electrodes: brain region}
-        # inv_mapping = {} #{brain region: EEG_electrodes}
-        # for k, v in region_assignment.items():
-        #     for _v in v:
-        #         if _v not in inv_mapping:
-        #             inv_mapping[_v] = []
-        #         inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
-        region_assignment = None
+                nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
+                                            proc_helper(fmri_mat_x, fmri_mat_y, len(adj_mx))
+                del fmri_mat_x, fmri_mat_y
+
+        # region_assignment: {EEG_electrodes: brain region}
+        inv_mapping = {} #{brain region: EEG_electrodes}
+        for k, v in region_assignment.items():
+            for _v in v:
+                if _v not in inv_mapping:
+                    inv_mapping[_v] = []
+                inv_mapping[_v] = sorted(list(set(inv_mapping[_v]+[k])))
 
         if scatter:
             # wavelet consts J=3 & Q=8
@@ -275,17 +241,21 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             order1 = np.where(meta['order'] == 1) #13*45
             order2 = np.where(meta['order'] == 2) #28*45
 
-            ipdb.set_trace()
-            coeffs = []
-            for i in range(len(_gt)):
-                coeffs.append(scattering(_gt[i].transpose(1,0)))
-            coeffs = np.stack(coeffs)
-            ipdb.set_trace()
+            if 'coeffs' not in locals():
+                coeffs = []
+                for i in tqdm(range(len(_gt))):
+                    coeffs.append(scattering(_gt[i].transpose(1,0)))
+                coeffs = np.stack(coeffs)
+                
+                pkl_data = (F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, 
+                            inv_mapping, region_assignment, nTrain, nValid, 
+                            nTest, scaler_in, scaler_out)
+                with open('CRASH_filtered_subsampled.pkl', 'wb') as handle:
+                    pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
             # # load wavelet coefficient scalers
             # with open('coeffs_scaler.pkl', 'rb') as handle:
             #     coeffs_scaler = pickle.load(handle)
             
-            # ipdb.set_trace()
             # # for transform: make it into same shape as y_E
             # mean = np.tile(coeffs_scaler['means'][None, None, ...], (args.batch_size, 61, 1, 1))
             # std = np.tile(coeffs_scaler['stds'][None, None, ...], (args.batch_size, 61, 1, 1))
@@ -442,20 +412,27 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 x = _input[:nTrain]
                 y = _gt[:nTrain]
                 adj_idx = adj_mx_idx[:nTrain]
+                if scatter:
+                    _coeffs = coeffs[:nTrain]
 
                 iter = 0
 
                 # shuffle in-out-adj_idx
-                x, y, adj_idx = shuffle(x, y, adj_idx)
+                if scatter:
+                    x, y, adj_idx, _coeffs = shuffle(x, y, adj_idx, _coeffs)
+                else:
+                    x, y, adj_idx = shuffle(x, y, adj_idx)
 
                 for batch_i in range(nTrain//args.batch_size):
                     _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
                     if scatter:
-                        _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                        coeff_y = scattering(_y.transpose(0,2,1))
-                        _y = torch.Tensor(_y).to(device)
-                        coeff_y = torch.Tensor(coeff_y).to(device)
+                        # _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        # coeff_y = torch.Tensor(scattering(_y.transpose(0,2,1))).to(device)
+                        # _y = torch.Tensor(_y).to(device)
+                        _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
+                        coeff_y  = torch.Tensor(_coeffs[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
+
                         _y = [_y, coeff_y]
                     else:
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
@@ -492,15 +469,19 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 x = _input[nTrain:nTrain+nValid]
                 y = _gt[nTrain:nTrain+nValid]
                 adj_idx = adj_mx_idx[nTrain:nTrain+nValid]
+                if scatter:
+                    _coeffs = coeffs[nTrain:nTrain+nValid]
 
                 for batch_i in range(nValid//args.batch_size):
                     _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
                     if scatter:
-                        _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                        coeff_y = scattering(_y.transpose(0,2,1))
-                        _y = torch.Tensor(_y).to(device)
-                        coeff_y = torch.Tensor(coeff_y).to(device)
+                        # _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                        # coeff_y = torch.Tensor(scattering(_y.transpose(0,2,1))).to(device)
+                        # _y = torch.Tensor(_y).to(device)
+                        _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
+                        coeff_y  = torch.Tensor(_coeffs[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
+
                         _y = [_y, coeff_y]
                     else:
                         _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
@@ -880,15 +861,19 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         x = _input[-nTest:]
         y = _gt[-nTest:]
         adj_idx = adj_mx_idx[-nTest:]
+        if scatter:
+            _coeffs = coeffs[-nTest:]
 
         for batch_i in range(nTest//args.batch_size):
             _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
             _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
             if scatter:
-                _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
-                coeff_y = scattering(_y.transpose(0,2,1))
-                _y = torch.Tensor(_y).to(device)
-                coeff_y = torch.Tensor(coeff_y).to(device)
+                # _y = y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
+                # coeff_y = torch.Tensor(scattering(_y.transpose(0,2,1))).to(device)
+                # _y = torch.Tensor(_y).to(device)
+                _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
+                coeff_y  = torch.Tensor(_coeffs[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)
+                
                 _y = [_y, coeff_y]
             else:
                 _y = torch.Tensor(y[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]).to(device)

@@ -121,7 +121,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
     if args.data == 'CRASH':
         basic_len = 1456 # hard-coded (if no subsample, use 2912)
-        CRASH_fname = 'CRASH_FE_filtered_subsampled.pkl'
+        CRASH_fname = 'CRASH_FE_filtered_subsampled_fmriADJ.pkl'
         try:
             with open(CRASH_fname, 'rb') as handle:
                 F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, \
@@ -197,6 +197,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
                                                 proc_helper(fmri_mat, eeg_mat, len(adj_mx))
                 del fmri_mat, eeg_mat, F_idxer, E_idxer
+                
                 # min-max normalization
                 _input = (_input - _input.min()) / (_input.max() - _input.min())
                 _gt = (_gt - _gt.min()) / (_gt.max() - _gt.min())        
@@ -398,10 +399,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             grads = []
 
             for i in range(1,args.epochs+1):
-                if i % 3 == 0:
-                    # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
-                    for g in engine.optimizer.param_groups:
-                        g['lr'] *= 0.9
+                # if i % 3 == 0:
+                #     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
+                #     for g in engine.optimizer.param_groups:
+                #         g['lr'] *= 0.9
 
                 train_loss = []
                 train_mae = []
@@ -415,8 +416,14 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 if scatter:
                     _coeffs = coeffs[:nTrain]
 
-                iter = 0
+                # # for overfitting
+                # x = _input
+                # y = _gt
+                # adj_idx = adj_mx_idx
+                # if scatter:
+                #     _coeffs = coeffs
 
+                iter = 0
                 # shuffle in-out-adj_idx
                 if scatter:
                     x, y, adj_idx, _coeffs = shuffle(x, y, adj_idx, _coeffs)
@@ -465,12 +472,18 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 s1 = time.time()
                 engine.set_state('val')
-                # engine.set_state('train') # overfit single batch
                 x = _input[nTrain:nTrain+nValid]
                 y = _gt[nTrain:nTrain+nValid]
                 adj_idx = adj_mx_idx[nTrain:nTrain+nValid]
                 if scatter:
                     _coeffs = coeffs[nTrain:nTrain+nValid]
+
+                # # for overfitting
+                # x = _input
+                # y = _gt
+                # adj_idx = adj_mx_idx
+                # if scatter:
+                #     _coeffs = coeffs
 
                 for batch_i in range(nValid//args.batch_size):
                     _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
@@ -524,7 +537,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 mvalid_cc = np.mean(valid_cc)
                 his_loss.append(mvalid_loss)
 
-                log = 'Epoch: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Valid CC: {:.4f}, Training Time: {:.4f}/epoch'
+                log = 'Epoch: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.6f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Valid CC: {:.4f}, Training Time: {:.4f}/epoch'
                 print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, mvalid_cc, (t2 - t1)),flush=True)
                 # only save the best
                 if mvalid_loss < min_loss:
@@ -538,7 +551,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
-            # ipdb.set_trace() #tmp1 = [i[0] for i in grads]
+            ipdb.set_trace() #tmp1 = [i[0] for i in grads] # plot his_loss
 
     elif args.data == 'syn' and not same_G: # different graph structure for each sample
         assert len(adj_mx) == nTrain + nValid + nTest
@@ -856,13 +869,18 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         pred_coeffs = []
 
         engine.set_state('test')
-        # engine.set_state('train') # overfit single batch
-
         x = _input[-nTest:]
         y = _gt[-nTest:]
         adj_idx = adj_mx_idx[-nTest:]
         if scatter:
             _coeffs = coeffs[-nTest:]
+
+        # # for overfitting
+        # x = _input
+        # y = _gt
+        # adj_idx = adj_mx_idx
+        # if scatter:
+        #     _coeffs = coeffs
 
         for batch_i in range(nTest//args.batch_size):
             _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
@@ -1180,6 +1198,6 @@ if __name__ == "__main__":
     # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
 
     # main(scatter=False, _map=False, F_only=True) # F prediction
-    main(scatter=True, _map=True, F_only=False, subsample=6)
+    main(scatter=False, _map=True, F_only=False, subsample=6)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

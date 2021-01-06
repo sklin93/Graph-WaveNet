@@ -330,7 +330,7 @@ class gwnet_diff_G(nn.Module):
                 self.skip_convs.append(nn.Conv2d(in_channels=dilation_channels,
                                                  out_channels=skip_channels,
                                                  kernel_size=(1, 1)))
-                self.bn.append(nn.BatchNorm2d(residual_channels))
+                self.bn.append(nn.BatchNorm2d(residual_channels)) # comment off for overfitting
                 # self.bn.append(nn.Sequential(
                 #     nn.Conv2d(in_channels=residual_channels*3, out_channels=residual_channels,
                 #               kernel_size=(1,1)),                    
@@ -398,8 +398,12 @@ class gwnet_diff_G(nn.Module):
             # nn.Tanh(), 
             nn.LeakyReLU(),
             # nn.ReLU(),
-            nn.Conv2d(in_channels=end_channels, out_channels=out_dim,
-                      kernel_size=(1,1), bias=True)
+            nn.Conv2d(in_channels=end_channels, out_channels=end_channels*2,
+                      kernel_size=(1,1), bias=True),
+            nn.LeakyReLU(),
+            # nn.ReLU(),
+            nn.Conv2d(in_channels=end_channels*2, out_channels=out_dim,
+                      kernel_size=(1,1), bias=True)            
             )
 
         self.end_mlp_e = nn.Sequential(
@@ -529,7 +533,24 @@ class gwnet_diff_G(nn.Module):
             x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
         else:
             x = input
+
+        # if viz: # x.shape [16, 1, 200, 15]
+        #     for j in range(10):
+        #         plt.plot(x.detach().cpu().numpy()[0,0,j,:])
+        #     plt.show()
+
         x = self.start_conv(x)
+
+        # if viz: # x.shape [16, 32, 200, 15]
+        #     ### plot features on different channels representing the same node fmri signal
+        #     for j in range(32):
+        #         plt.plot(x.detach().cpu().numpy()[0,j,0,:])
+        #     plt.show()
+        #     ### plot one channel's features of different fmri signals (should be different)
+        #     for j in range(10):
+        #         plt.plot(x.detach().cpu().numpy()[0,0,j,:])
+        #     plt.show()
+
         skip = 0
 
         # calculate the current adaptive adj matrix once per iteration
@@ -603,7 +624,7 @@ class gwnet_diff_G(nn.Module):
             # add t representation
             x = x + residual[:, :, :, -x.size(3):]# + t_rep
             # x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
-            x = self.bn[i](x)
+            x = self.bn[i](x) # comment off for overfitting
             # print(x.shape)
 
         # del residual, x
@@ -613,11 +634,16 @@ class gwnet_diff_G(nn.Module):
         # skip = skip + torch.normal(torch.zeros_like(skip), 0.1*skip.std()*torch.ones_like(skip))
         # ###
         x = self.end_module(skip)
-        if viz:
-            print(x.shape)
+        if viz: # x.shape [16, 512, 200, 1]
+            # (results look similar) each node's h-D (h being #hidden dim) feature
             for j in range(10):
                 plt.plot(x.detach().cpu().numpy()[0,:,j,0])
             plt.show()
+            # plot each channel's value (on all nodes)
+            for j in range(10): 
+                plt.plot(x.detach().cpu().numpy()[0,j,:,0])
+            plt.show()
+            ipdb.set_trace()
         
         if self.meta is None:
             # ### F prediction

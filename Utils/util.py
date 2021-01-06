@@ -497,6 +497,11 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
 
     region_assignment = get_region_assignment(num_region) #{EEG_electrodes: brain region}
 
+    '''using fMRI connectivities as the adj_mx'''
+    adjs = []
+    for i in range(len(fmri_mat)):
+        adjs.append([np.corrcoef(fmri_mat[i].T).astype(np.float32)])
+    ipdb.set_trace()
     return adjs, fmri_mat, eeg_mat, region_assignment, F_t
 
     '''

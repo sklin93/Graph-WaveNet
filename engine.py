@@ -76,13 +76,15 @@ class trainer():
                 supports_len += 1
 
             out_dim_f = int(seq_length//F_t)
-            if meta is None:
-                if subsample:
-                    out_dim = out_dim_f #subsampled E
-                else:
-                    out_dim = seq_length #original E
-            else:
-                out_dim = seq_length
+            # if meta is None:
+            #     if subsample:
+            #         out_dim = out_dim_f #subsampled E
+            #     else:
+            #         out_dim = seq_length #original E
+            # else:
+            #     out_dim = seq_length
+
+            out_dim = seq_length
 
             if F_only:
                 self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, supports_len, batch_size,
@@ -574,6 +576,9 @@ class trainer():
                         plt.plot(real_F[0,:,j].cpu().numpy())
                     if real_E is not None:
                         plt.plot(real_E[0,:,j].cpu().numpy())
+                plt.show()
+                plt.plot(real_E[0,:,0].cpu().numpy())
+                plt.plot(E[0,:,0].cpu().numpy())
                 plt.show()
                 ipdb.set_trace()          
             if self.F_only:

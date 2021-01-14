@@ -30,10 +30,10 @@ def weighted_mse(preds, labels, null_val=np.nan):
     
     return torch.mean(loss)
 
-class Regress_Loss_1(torch.nn.Module):
+class cc_loss(torch.nn.Module):
     
     def __init__(self):
-        super(Regress_Loss_1,self).__init__()
+        super(cc_loss,self).__init__()
         
     def forward(self,x,y):
         vx = x - torch.mean(x)
@@ -96,7 +96,7 @@ class trainer():
                                    out_nodes=out_nodes, meta=meta,
                                    scatter=scatter)
             else:
-                self.model = gwnet_diff_G(device, num_nodes, dropout, supports_len,
+                self.model = gwnet_diff_G2(device, num_nodes, dropout, supports_len,
                                    gcn_bool=gcn_bool, addaptadj=addaptadj,
                                    in_dim=in_dim, out_dim=out_dim, out_dim_f=out_dim_f,
                                    residual_channels=nhid, dilation_channels=nhid, 
@@ -133,7 +133,7 @@ class trainer():
         # self.loss = weighted_mse
         # self.loss = nn.SmoothL1Loss() # HuberLoss
         # self.loss = nn.CosineEmbeddingLoss()
-        self.loss2 = Regress_Loss_1()
+        self.loss2 = cc_loss()
         self.scaler = scaler
         self.clip = 1 # TODO: tune, original 5
         self.supports = supports
@@ -145,7 +145,7 @@ class trainer():
         if scatter == True:
             assert self.meta is not None, 'need meta info if using scattering'
         self.scatter = scatter
-        self.F_only = F_only
+        self.F_only = True#F_only
 
     def train(self, input, real_val):
         self.model.train()
@@ -304,7 +304,8 @@ class trainer():
             F = output.squeeze()
         else:
             if self.meta is None:
-                E = output.squeeze()
+                E = output[0].squeeze()
+                F = output[1].squeeze()
             else: # with scattering
                 E = output[0].squeeze()
                 predict = output[1].squeeze()
@@ -319,11 +320,13 @@ class trainer():
                 loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()
+                real_F = real_F.to(self.device).squeeze()
                 # plt.plot(E[0,0].detach().cpu().numpy())
                 # plt.plot(E[0,1].detach().cpu().numpy())
                 # plt.show()
                 # condition = Variable(torch.ones(1, 1), requires_grad=False).to(self.device) # for CosineEmbeddingLoss
-                loss = self.loss(E, real_E) #+ self.loss(F, real_F)
+                loss = self.loss(E, real_E) #+ self.loss(F, real_F)#+ self.loss2(E, real_E)
+                # loss = self.loss(F, real_F)
 
         else: # with scattering
             # loss = self.loss(E, real_E[0], 0.0) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:], 0.0)\
@@ -556,7 +559,8 @@ class trainer():
             F = output.squeeze()
         else:
             if self.meta is None:
-                E = output.squeeze()
+                E = output[0].squeeze()
+                F = output[1].squeeze()
             else: # with scattering
                 E = output[0].squeeze()
                 predict = output[1].squeeze()
@@ -564,30 +568,44 @@ class trainer():
         ##### loss #####
         if self.meta is None:
             if viz:
-                plt.figure('pred')
-                for j in range(10):
-                    if F is not None:
-                        plt.plot(F[0,:,j].cpu().numpy())
-                    if E is not None:
-                        plt.plot(E[0,:,j].cpu().numpy())
-                plt.figure('gt')
-                for j in range(10):
-                    if real_F is not None:
-                        plt.plot(real_F[0,:,j].cpu().numpy())
-                    if real_E is not None:
-                        plt.plot(real_E[0,:,j].cpu().numpy())
-                plt.show()
-                plt.plot(real_E[0,:,0].cpu().numpy())
-                plt.plot(E[0,:,0].cpu().numpy())
-                plt.show()
+                for j in range(5):
+                    plt.plot(F.squeeze()[0,j].cpu().numpy())
+                    plt.plot(real_F.squeeze()[0,j].cpu().numpy())
+                    plt.show()
+                # plt.figure('pred')
+                # for j in range(10):
+                #     if self.F_only:
+                #         plt.plot(F[0,:,j].cpu().numpy())
+                #     else:
+                #         plt.plot(E[0,:,j].cpu().numpy())
+                # plt.figure('gt')
+                # for j in range(10):
+                #     if self.F_only:
+                #         plt.plot(real_F[0,:,j].cpu().numpy())
+                #     else:
+                #         plt.plot(real_E[0,:,j].cpu().numpy())
+                # plt.show()
+
+                # see if different inputs have the same output..
+                if not self.F_only:
+                    plt.plot(E[0,:,0].cpu().numpy())
+                    plt.plot(E[1,:,0].cpu().numpy())
+                    plt.show()                
+                    plt.plot(real_E[0,:,0].cpu().numpy())
+                    plt.plot(E[0,:,0].cpu().numpy())
+                    plt.show()
+                    plt.plot(real_F.squeeze()[0,0].cpu().numpy())
+                    plt.plot(F[0,0].cpu().numpy())
                 ipdb.set_trace()          
             if self.F_only:
                 real_F = real_F.to(self.device).squeeze()
                 loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()
+                real_F = real_F.to(self.device).squeeze()
                 # condition = Variable(torch.ones(1, 1), requires_grad=False).to(self.device) # for CosineEmbeddingLoss
-                loss = self.loss(E, real_E) #+ self.loss(F, real_F)
+                loss = self.loss(E, real_E) #+ self.loss(F, real_F) #+ self.loss(F, real_F)
+                # loss = self.loss(F, real_F)
 
         else: # with scattering
             real_E[0] = real_E[0].squeeze()
@@ -663,8 +681,7 @@ class trainer():
             else:
                 real_E = real_E.to(self.device).squeeze()
                 # condition = Variable(torch.ones(1, 1), requires_grad=False).to(self.device) # for CosineEmbeddingLoss
-                loss = self.loss(E, real_E) #+ self.loss(F, real_F)
-
+                loss = self.loss(E, real_E) + self.loss2(E, real_E)
         else:
             if self.scatter:
                 real_E[0] = real_E[0].squeeze()

@@ -253,6 +253,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                             nTest, scaler_in, scaler_out)
                 with open(CRASH_fname, 'wb') as handle:
                     pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+                    ipdb.set_trace()
             # # load wavelet coefficient scalers
             # with open('coeffs_scaler.pkl', 'rb') as handle:
             #     coeffs_scaler = pickle.load(handle)
@@ -392,14 +393,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
             print("start training...",flush=True)
 
-            his_loss =[]
+            his_loss_train = []
+            his_loss_val =[]
             val_time = []
             train_time = []
             min_loss = float('Inf')
             grads = []
 
             for i in range(1,args.epochs+1):
-                # if i % 3 == 0:
+                # if i % 50 == 0:
                 #     # lr = max(0.000002,args.learning_rate * (0.1 ** (i // 10)))
                 #     for g in engine.optimizer.param_groups:
                 #         g['lr'] *= 0.9
@@ -430,6 +432,9 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 else:
                     x, y, adj_idx = shuffle(x, y, adj_idx)
 
+                # shuffle y, to test if model really learns anything (~random output)
+                # y = shuffle(y)
+
                 for batch_i in range(nTrain//args.batch_size):
                     _adj_idx = adj_idx[batch_i * args.batch_size: (batch_i + 1) * args.batch_size]
                     _x = torch.Tensor(x[batch_i * args.batch_size: (batch_i + 1) * args.batch_size][...,None]).to(device).transpose(1, 3)
@@ -447,7 +452,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     if F_only:
                         metrics = engine.train_CRASH(_x, _y, None, region_assignment, _adj_idx)
                     else:
-                        metrics = engine.train_CRASH(_x, None, _y, region_assignment, _adj_idx)
+                        metrics = engine.train_CRASH(_x, _x, _y, region_assignment, _adj_idx)
 
                     train_loss.append(metrics[0])
                     train_mae.append(metrics[1])
@@ -503,12 +508,12 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         if F_only:
                             metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx, viz=False)
                         else:
-                            metrics = engine.eval_CRASH(_x, None, _y, region_assignment, _adj_idx, viz=False)
+                            metrics = engine.eval_CRASH(_x, _x, _y, region_assignment, _adj_idx, viz=False)
                     else:
                         if F_only:
                             metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx)
                         else:
-                            metrics = engine.eval_CRASH(_x, None, _y, region_assignment, _adj_idx)
+                            metrics = engine.eval_CRASH(_x, _x, _y, region_assignment, _adj_idx)
                     valid_loss.append(metrics[0])
                     valid_mae.append(metrics[1])
                     valid_mape.append(metrics[2])
@@ -535,7 +540,8 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 mvalid_mape = np.mean(valid_mape)
                 mvalid_rmse = np.mean(valid_rmse)
                 mvalid_cc = np.mean(valid_cc)
-                his_loss.append(mvalid_loss)
+                his_loss_train.append(mtrain_loss)
+                his_loss_val.append(mvalid_loss)
 
                 log = 'Epoch: {:03d}, Train Loss: {:.6f}, Train MAE: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.6f}, Valid MAE: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Valid CC: {:.4f}, Training Time: {:.4f}/epoch'
                 print(log.format(i, mtrain_loss, mtrain_mae, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mae, mvalid_mape, mvalid_rmse, mvalid_cc, (t2 - t1)),flush=True)
@@ -551,7 +557,12 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 # torch.save(engine.model.state_dict(), args.save+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
             print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
             print("Average Inference Time: {:.4f} secs".format(np.mean(val_time))) 
-            ipdb.set_trace() #tmp1 = [i[0] for i in grads] # plot his_loss
+            plt.plot(his_loss_train, label='train loss')
+            plt.plot(his_loss_val, label='val loss')
+            plt.legend()
+            plt.show()
+            # ipdb.set_trace() #tmp1 = [i[0] for i in grads] # plot his_loss_train and his_loss_val
+            his_loss = his_loss_val
 
     elif args.data == 'syn' and not same_G: # different graph structure for each sample
         assert len(adj_mx) == nTrain + nValid + nTest
@@ -900,12 +911,12 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 if F_only:
                     metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx, viz=True)
                 else:
-                    metrics = engine.eval_CRASH(_x, None, _y, region_assignment, _adj_idx, viz=True)
+                    metrics = engine.eval_CRASH(_x, _x, _y, region_assignment, _adj_idx, viz=True)
             else:
                 if F_only:
                     metrics = engine.eval_CRASH(_x, _y, None, region_assignment, _adj_idx)
                 else:
-                    metrics = engine.eval_CRASH(_x, None, _y, region_assignment, _adj_idx)
+                    metrics = engine.eval_CRASH(_x, _x, _y, region_assignment, _adj_idx)
 
             amae.append(metrics[1])
             amape.append(metrics[2])

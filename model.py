@@ -998,37 +998,26 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
         #                   kernel_size=(1,1), bias=True)
         #         )
 
-        # ## temporal transConv
-        # convTransK = 7
-        # convTransD = 7
-        # self.end_module = nn.Sequential(
-        #     nn.LeakyReLU(),
-        #     nn.ConvTranspose2d(in_channels=skip_channels, out_channels=skip_channels//2,
-        #                        kernel_size=(1,convTransK), dilation=convTransD),
-        #     nn.LeakyReLU(),
-        #     nn.ConvTranspose2d(in_channels=skip_channels//2, out_channels=residual_channels,
-        #                        kernel_size=(1,convTransK), dilation=convTransD),
-        #     nn.LeakyReLU(),
-        #     nn.ConvTranspose2d(in_channels=residual_channels, out_channels=1,
-        #                        kernel_size=(1,convTransK), dilation=convTransD),
-        #     )
-
-        # ## temporal upsample
-        # upScale = 5
-        # self.end_module = nn.Sequential(
-        #     nn.LeakyReLU(),
-        #     nn.Upsample(scale_factor=(1, upScale)),
-        #     nn.Conv2d(in_channels=skip_channels, out_channels=skip_channels//2,
-        #               kernel_size=(1,1)),#, bias=True),
-        #     nn.LeakyReLU(),
-        #     nn.Upsample(scale_factor=(1, upScale)),
-        #     nn.Conv2d(in_channels=skip_channels//2, out_channels=residual_channels,
-        #               kernel_size=(1,1)),#, bias=True),
-        #     nn.LeakyReLU(),
-        #     nn.Upsample(scale_factor=(1, upScale)),
-        #     nn.Conv2d(in_channels=residual_channels, out_channels=1,
-        #               kernel_size=(1,1)),#, bias=True),
-        #     )
+        ## temporal transConv (de-tcn)
+        convTransK = 3
+        convTransD = 1
+        upScale = 2
+        self.end_module = nn.Sequential(
+            nn.LeakyReLU(),
+            nn.Upsample(scale_factor=(1,upScale)),
+            nn.ConvTranspose2d(in_channels=skip_channels, out_channels=end_channels, 
+                               kernel_size=(1,convTransK), dilation=convTransD),
+            nn.LeakyReLU(),
+            nn.Upsample(scale_factor=(1,upScale)),
+            nn.ConvTranspose2d(in_channels=end_channels, out_channels=end_channels,
+                               kernel_size=(1,convTransK), dilation=convTransD),
+            nn.LeakyReLU(),
+            nn.Upsample(scale_factor=(1,upScale)),
+            nn.ConvTranspose2d(in_channels=end_channels, out_channels=end_channels,
+                               kernel_size=(1,convTransK), dilation=convTransD),
+            nn.LeakyReLU(),
+            nn.Conv2d(in_channels=end_channels, out_channels=1, kernel_size=(1,1), bias=True),
+            )
 
         # self.end_module_add = nn.Sequential(
         #     # nn.Tanh(), 
@@ -1050,28 +1039,19 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
         #               kernel_size=(1,1), bias=True)
         #     )
 
-        # self.end_mlp_f = nn.Sequential(
-        #     # nn.Tanh(),
-        #     nn.LeakyReLU(),
-        #     # nn.ReLU(),
-        #     nn.Conv2d(in_channels=end_channels, out_channels=out_dim_f*4,
-        #               kernel_size=(1,1), bias=True),
-        #     nn.LeakyReLU(),
-        #     nn.Conv2d(in_channels=out_dim_f*4, out_channels=out_dim_f,
-        #               kernel_size=(1,1), bias=True)
-        #     )
+        self.end_mlp_f = nn.Sequential(
+            # nn.Tanh(),
+            nn.LeakyReLU(),
+            # nn.ReLU(),
+            # nn.Conv2d(in_channels=end_channels, out_channels=out_dim_f,
+            nn.Conv2d(in_channels=27, out_channels=out_dim_f,
+                      kernel_size=(1,1), bias=True),
+            # nn.LeakyReLU(),
+            # nn.Conv2d(in_channels=out_dim_f*4, out_channels=out_dim_f,
+            #           kernel_size=(1,1), bias=True)
+            )
 
         # self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
-
-        self.end_conv_1 = nn.Conv2d(in_channels=skip_channels,
-                                  out_channels=end_channels,
-                                  kernel_size=(1,1),
-                                  bias=True)
-
-        self.end_conv_2 = nn.Conv2d(in_channels=end_channels,
-                                    out_channels=out_dim_f,
-                                    kernel_size=(1,1),
-                                    bias=True)
         if scatter:
             J = 3
             Q = 9
@@ -1110,11 +1090,6 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
             x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
         else:
             x = input
-
-        # if viz: # x.shape [16, 1, 200, 15]
-        #     for j in range(10):
-        #         plt.plot(x.detach().cpu().numpy()[0,0,j,:])
-        #     plt.show()
 
         x = self.start_conv(x)
 
@@ -1199,7 +1174,7 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
         # ### test: adding noise to hidden rep
         # skip = skip + torch.normal(torch.zeros_like(skip), 0.1*skip.std()*torch.ones_like(skip))
         # ###
-        # x = self.end_module(skip)
+        x = self.end_module(skip)
         # if viz: # x.shape [16, 512, 200, 1]
         #     # (results look similar) each node's h-D (h being #hidden dim) feature
         #     for j in range(10):
@@ -1239,7 +1214,7 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
         #     # x = x.transpose(1, 2)
         #     # sig = self.end_mlp_e(x)
         #     return sig, self.scattering(sig)#[:,:,:,self.meta[1]] # order0 only            
-        x = F.relu(skip)
-        x = F.relu(self.end_conv_1(x))
-        x = self.end_conv_2(x)
+        # ipdb.set_trace()
+        x = self.end_mlp_f(x.transpose(1,3))
+        # ipdb.set_trace()
         return x.transpose(1,2)

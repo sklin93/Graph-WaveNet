@@ -135,7 +135,7 @@ class trainer():
         # self.loss = nn.CosineEmbeddingLoss()
         self.loss2 = cc_loss()
         self.scaler = scaler
-        self.clip = 1 # TODO: tune, original 5
+        self.clip = 5 # TODO: tune, original 5
         self.supports = supports
         self.aptinit = aptinit
         self.state = None
@@ -171,6 +171,10 @@ class trainer():
         assert state in ['train', 'val', 'test']
         self.state = state
         self.state_supports = [torch.tensor(i).to(self.device) for i in self.supports[state]]
+        # self.state_supports2 = None
+        supports2 = [np.linalg.pinv(s) for s in self.supports[state]]
+        # supports2 = [s/s.sum(1)[:,None,:] for s in supports2]
+        self.state_supports2 = [torch.tensor(i).to(self.device) for i in supports2]
 
     def train_syn(self, input, real, G, adj_idx=None, pooltype='None'):
         '''output p=1 sequence, then deteministically subsample/average to F and E'''
@@ -290,6 +294,9 @@ class trainer():
 
         supports = self.state_supports
         supports = [s[adj_idx] for s in supports]
+        supports2 = self.state_supports2
+        if supports2:
+            supports2 = [s[adj_idx] for s in supports2]
         
         aptinit = self.aptinit
         if aptinit is not None:
@@ -297,7 +304,7 @@ class trainer():
             if aptinit is not None:
                 aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
-        output = self.model(input, supports, aptinit)
+        output = self.model(input, supports, supports, aptinit)
         # output = self.model(input) # validate SC
 
         if self.F_only:
@@ -541,6 +548,10 @@ class trainer():
 
         supports = self.state_supports
         supports = [s[adj_idx] for s in supports]
+        supports2 = self.state_supports2
+        if supports2:
+            supports2 = [s[adj_idx] for s in supports2]
+
         aptinit = self.aptinit
         if aptinit is not None:
             aptinit = aptinit[self.state]
@@ -548,7 +559,7 @@ class trainer():
                 aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
         with torch.no_grad():
-            output = self.model(input, supports, aptinit, viz=viz)
+            output = self.model(input, supports, supports, aptinit, viz=viz)
             # output = self.model(input) # validate SC
 
         F = None

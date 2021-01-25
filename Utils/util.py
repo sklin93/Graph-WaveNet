@@ -500,8 +500,11 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     '''using fMRI connectivities as the adj_mx'''
     adjs = []
     for i in range(len(fmri_mat)):
-        adjs.append([np.corrcoef(fmri_mat[i].T).astype(np.float32)])
-    ipdb.set_trace()
+        fc = np.corrcoef(fmri_mat[i].T).astype(np.float32)
+        rowsum = np.array(fc.sum(1))        
+        adjs.append([fc / rowsum[:,None]])
+
+    # ipdb.set_trace()
     return adjs, fmri_mat, eeg_mat, region_assignment, F_t
 
     '''

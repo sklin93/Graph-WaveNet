@@ -120,13 +120,17 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
     device = torch.device(args.device)
 
     if args.data == 'CRASH':
-        basic_len = 1456 # hard-coded (if no subsample, use 2912)
-        CRASH_fname = 'CRASH_FE_filtered_subsampled_fmriADJ.pkl'
+        if subsample:
+            basic_len = 1456 #hard-coded for 1/6 subsample
+        else:
+            basic_len = 2912
+        CRASH_fname = 'CRASH_Fonly.pkl'
         try:
             with open(CRASH_fname, 'rb') as handle:
                 F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, \
                 inv_mapping, region_assignment, nTrain, nValid, \
                 nTest, scaler_in, scaler_out = pickle.load(handle)
+
         except:
             adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
             
@@ -217,9 +221,10 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 fmri_mat_x = fmri_mat_x.reshape(-1, *fmri_mat_x.shape[2:])
                 fmri_mat_y = fmri_mat_y.reshape(-1, *fmri_mat_y.shape[2:])
-
+                
                 nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
                                             proc_helper(fmri_mat_x, fmri_mat_y, len(adj_mx))
+                # ipdb.set_trace() #F_t, adj_mx, adj_mx_idx, _input, _gt, nTrain, nValid, nTest, scaler_in, scaler_out
                 del fmri_mat_x, fmri_mat_y
 
         # region_assignment: {EEG_electrodes: brain region}
@@ -1208,7 +1213,7 @@ if __name__ == "__main__":
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
 
-    # main(scatter=False, _map=False, F_only=True) # F prediction
-    main(scatter=False, _map=True, F_only=False, subsample=6)
+    main(scatter=False, _map=False, F_only=True) # F prediction
+    # main(scatter=False, _map=True, F_only=False, subsample=6)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

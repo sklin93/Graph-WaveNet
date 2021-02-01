@@ -132,7 +132,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 nTest, scaler_in, scaler_out = pickle.load(handle)
 
         except:
-            adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
+            scs, adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
             
             if subsample:
                 F_t /= subsample
@@ -224,7 +224,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 
                 nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
                                             proc_helper(fmri_mat_x, fmri_mat_y, len(adj_mx))
-                # ipdb.set_trace() #F_t, adj_mx, adj_mx_idx, _input, _gt, nTrain, nValid, nTest, scaler_in, scaler_out
+                ipdb.set_trace() #F_t, scs, adj_mx, adj_mx_idx, _input, _gt, nTrain, nValid, nTest, scaler_in, scaler_out
                 del fmri_mat_x, fmri_mat_y
 
         # region_assignment: {EEG_electrodes: brain region}
@@ -253,7 +253,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                     coeffs.append(scattering(_gt[i].transpose(1,0)))
                 coeffs = np.stack(coeffs)
                 
-                pkl_data = (F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, 
+                pkl_data = (F_t, scs, adj_mx, adj_mx_idx, _input, _gt, coeffs, 
                             inv_mapping, region_assignment, nTrain, nValid, 
                             nTest, scaler_in, scaler_out)
                 with open(CRASH_fname, 'wb') as handle:
@@ -292,7 +292,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             with open(syn_file, 'wb') as handle:
                 pickle.dump(pkl_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        if True: #False
+        if False:
             import networkx as nx
             ## randomize SC entries to see the sensitivity to SC
             # use completely random SC w/ same level of sparsity

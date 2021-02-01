@@ -407,6 +407,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     # check and keep only common sessions for each subject
     eeg_mat = []
     adjs = []
+    scs = []
     fmri_mat = []
     subj_id = []
 
@@ -435,6 +436,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
                 else:
                     if len(cur_fmri) == fmri_len and len(cur_eeg) == eeg_len:
                         # comn_sess.append(k)
+                        scs.append(sc[subj][k])
                         adjs.append(mod_adj(sc[subj][k], adjtype))
                         fmri_mat.append(cur_fmri)
                         eeg_mat.append(cur_eeg)
@@ -445,6 +447,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
 
     fmri_mat = np.stack(fmri_mat)
     eeg_mat = np.stack(eeg_mat)
+    scs = np.stack(scs)
 
     ''' dealing with huge spikes in the data'''
     valid_e_idx = []
@@ -490,6 +493,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     valid_idx = list(set(valid_e_idx) & set(valid_f_idx))
     # only keep valid ones
     fmri_mat = fmri_mat[valid_idx]
+    scs = scs[valid_idx]
     # remove corresponding adj
     adjs = [adjs[i] for i in valid_idx]
     # remove EEG frames corresponds to removed fmri ones & only keep those sessions have valid fmri
@@ -497,15 +501,15 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
 
     region_assignment = get_region_assignment(num_region) #{EEG_electrodes: brain region}
 
-    '''using fMRI connectivities as the adj_mx'''
-    adjs = []
-    for i in range(len(fmri_mat)):
-        fc = np.corrcoef(fmri_mat[i].T).astype(np.float32)
-        rowsum = np.array(fc.sum(1))        
-        adjs.append([fc / rowsum[:,None]])
+    # '''using fMRI connectivities as the adj_mx'''
+    # adjs = []
+    # for i in range(len(fmri_mat)):
+    #     fc = np.corrcoef(fmri_mat[i].T).astype(np.float32)
+    #     rowsum = np.array(fc.sum(1))
+    #     adjs.append([fc / rowsum[:,None]])
 
     # ipdb.set_trace()
-    return adjs, fmri_mat, eeg_mat, region_assignment, F_t
+    return scs, adjs, fmri_mat, eeg_mat, region_assignment, F_t
 
     '''
     Several issues: 

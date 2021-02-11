@@ -381,7 +381,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
 
     comn_ids = get_comn_ids()
     # comn_ids = ['1041h'] # only using one subj's data 1043f
-    print(len(comn_ids), 'subjects:', comn_ids)
+    # print(len(comn_ids), 'subjects:', comn_ids)
     num_region = 200 # 200 or 400
 
     eeg = get_eeg(comn_ids)
@@ -412,6 +412,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     subj_id = []
 
     # sub_ses = {}
+    ctr = 0# for subj classification, serve as the class
     for subj in comn_ids:
         # comn_sess = []
         for k in eeg[subj]:
@@ -440,7 +441,9 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
                         adjs.append(mod_adj(sc[subj][k], adjtype))
                         fmri_mat.append(cur_fmri)
                         eeg_mat.append(cur_eeg)
-                        subj_id.append((subj,k))
+                        # subj_id.append((subj,k))
+                        subj_id.append(ctr)
+        ctr += 1
         # sub_ses[subj] = comn_sess
     del fmri
     del eeg
@@ -491,6 +494,8 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
 
     # combining valid eeg index and valid fmri index
     valid_idx = list(set(valid_e_idx) & set(valid_f_idx))
+    subj_cls = np.asarray(subj_id)[valid_idx]
+    np.save('subj_cls.npy', subj_cls)
     # only keep valid ones
     fmri_mat = fmri_mat[valid_idx]
     scs = scs[valid_idx]

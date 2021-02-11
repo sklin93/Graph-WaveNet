@@ -87,6 +87,10 @@ class gcn2(nn.Module):
         h = F.dropout(h, self.dropout, training=self.training)
         return h
 
+def CausalConv2d(in_channels, out_channels, kernel_size, dilation=(1,1), **kwargs):
+    pad = (kernel_size[1] - 1) * dilation[1]
+    return nn.Conv1d(in_channels, out_channels, kernel_size, padding=(0,pad), dilation=dilation, **kwargs)
+
 #strictly pooling at end
 class pool(torch.nn.Module):
     def __init__(self,in_channels,num_nodes_eeg,dropout,support_len, non_linearity=torch.tanh):
@@ -683,7 +687,7 @@ class gwnet_diff_G_Fonly(nn.Module):
                 gcn_bool=True, addaptadj=True, in_dim=2, out_dim=12, out_dim_f=5,
                 residual_channels=32, dilation_channels=32, skip_channels=256,
                 end_channels=512, kernel_size=2, blocks=4, layers=2,
-                out_nodes=64, meta=None, scatter=False):
+                out_nodes=64):
 
         super(gwnet_diff_G_Fonly, self).__init__()
         self.dropout = dropout
@@ -693,7 +697,6 @@ class gwnet_diff_G_Fonly(nn.Module):
         self.addaptadj = addaptadj
         self.device = device
         self.num_nodes = num_nodes
-        self.scatter = scatter
         self.out_dim = out_dim
 
         self.filter_convs = nn.ModuleList()
@@ -708,11 +711,7 @@ class gwnet_diff_G_Fonly(nn.Module):
             '''If different samples have different supports, theres no way to 
             init nodevec using supports info...'''
             # if aptinit is None:
-            self.nodevec1 = nn.Parameter(torch.randn(batch_size, 
-                                    self.num_nodes, 10).to(self.device), 
-                                    requires_grad=True).to(self.device)
-            self.nodevec2 = nn.Parameter(torch.randn(batch_size, 
-                                    10, self.num_nodes).to(self.device), 
+            self.nodevec = nn.Parameter(torch.randn(10, 10).to(self.device), 
                                     requires_grad=True).to(self.device)
 
             # else:
@@ -736,17 +735,17 @@ class gwnet_diff_G_Fonly(nn.Module):
             for i in range(layers):
                 # dilated convolutions
                 # TODO: change kernel_size and stride
-                self.filter_convs.append(nn.Conv2d(in_channels=residual_channels,
+                self.filter_convs.append(CausalConv2d(in_channels=residual_channels,
                                                    out_channels=dilation_channels,
                                                    kernel_size=(1,kernel_size),
                                                    # stride=(1,2),
-                                                   dilation=new_dilation))
+                                                   dilation=(1,new_dilation)))
 
-                self.gate_convs.append(nn.Conv2d(in_channels=residual_channels,
+                self.gate_convs.append(CausalConv2d(in_channels=residual_channels,
                                                  out_channels=dilation_channels,
                                                  kernel_size=(1, kernel_size), 
                                                  # stride=(1,2),
-                                                 dilation=new_dilation))
+                                                 dilation=(1,new_dilation)))
 
                 # 1x1 convolution for residual connection
                 self.residual_convs.append(nn.Conv2d(in_channels=dilation_channels,
@@ -765,21 +764,7 @@ class gwnet_diff_G_Fonly(nn.Module):
                     self.gconv.append(gcn2(dilation_channels, residual_channels, dropout,
                                                               support_len=supports_len))
 
-        self.end_module = nn.Sequential(
-                # nn.Tanh(), 
-                # nn.LeakyReLU(),
-                nn.ReLU(),
-                nn.Conv2d(in_channels=skip_channels, out_channels=end_channels,
-                          kernel_size=(1,1), bias=True)
-                )     
 
-        self.end_mlp_f = nn.Sequential(
-            # nn.Tanh(),
-            # nn.LeakyReLU(), 
-            nn.ReLU(),
-            nn.Conv2d(in_channels=end_channels, out_channels=out_dim_f,
-                      kernel_size=(1,1), bias=True)
-            )
 
         # self.end_conv_1 = nn.Conv2d(in_channels=skip_channels,
         #                           out_channels=end_channels,
@@ -791,13 +776,11 @@ class gwnet_diff_G_Fonly(nn.Module):
         #                             kernel_size=(1,1),
         #                             bias=True)
 
-        if scatter:
-            J = 2
-            Q = 9
-            self.scattering = Scattering1D(J, out_dim_f, Q)
+        self.end_conv_1 = nn.Conv2d(skip_channels, skip_channels//2, 1, bias=True)
+        self.end_conv_2 = nn.Conv2d(skip_channels//2, out_dim_f, 1, bias=True)
+        self.end_conv_3 = nn.Conv2d(out_dim_f, 1, 1, bias=True)
 
         self.receptive_field = receptive_field
-        self.meta = meta
 
     def forward(self, input, supports=None, aptinit=None, viz=False):
         # inputs: [batch_size, 1, num_nodes, in_len+1], supports: len 2, each (batch_size, num_nodes, num_nodes)
@@ -806,18 +789,20 @@ class gwnet_diff_G_Fonly(nn.Module):
                 supports = []
         ### normal forward
         # print(self.receptive_field)
-        in_len = input.size(3)
-        if in_len<self.receptive_field:
-            x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
-        else:
-            x = input
-        x = self.start_conv(x)
+        # in_len = input.size(3)
+        # if in_len<self.receptive_field:
+        #     x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
+        # else:
+        #     x = input
+        # x = self.start_conv(x)
+        x = self.start_conv(input)
         skip = 0
 
         # calculate the current adaptive adj matrix once per iteration
         new_supports = None
         if self.gcn_bool and self.addaptadj:
-            adp = F.softmax(F.relu(torch.matmul(self.nodevec1, self.nodevec2)), dim=2)
+            nodevec = torch.einsum('ncl,lv->ncv', (input[:,0,...],self.nodevec))
+            adp = F.softmax(F.relu(torch.matmul(nodevec, nodevec.transpose(1,2))), dim=2)
             # if viz:
             #     ipdb.set_trace()
             #     plt.imshow(adp[0].detach().cpu().numpy())
@@ -861,16 +846,20 @@ class gwnet_diff_G_Fonly(nn.Module):
            
             # dilated convolution
             filter = self.filter_convs[i](residual)
-            filter = torch.tanh(filter)
+            filter = torch.tanh(filter[..., :-self.filter_convs[i].padding[1]])
             gate = self.gate_convs[i](residual)
-            gate = torch.sigmoid(gate)
+            gate = torch.sigmoid(gate[..., :-self.gate_convs[i].padding[1]])
             x = filter * gate
-
+            if i % self.layers == self.layers-1:
+                x = F.max_pool2d(x, (1,2))
             # parametrized skip connection
             s = x
             s = self.skip_convs[i](s)
             try:
-                skip = skip[:, :, :,  -s.size(3):]
+                if s.size(-1)*2 == skip.size(-1):
+                    skip = F.max_pool2d(skip,(1,2))
+                else:
+                    skip = skip[..., -s.size(-1):]
             except:
                 skip = 0
             skip = s + skip
@@ -887,14 +876,13 @@ class gwnet_diff_G_Fonly(nn.Module):
                     x = self.gconv[i](x, self.dummy_tensor, *supports)
                     # x = checkpoint(self.gconv[i], x, self.dummy_tensor, *supports)
             else:
-                x = self.residual_convs[i](x, self.dummy_tensor)
+                x = self.residual_convs[i](x)
                 # x = checkpoint(self.residual_convs[i], x, self.dummy_tensor)
 
-            x = x + residual[:, :, :, -x.size(3):]
+            x = x + residual[..., -x.size(-1):]
             # add t representation
             # x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
-
-            # x = self.bn[i](x) #torch.Size([8, 32, 200, 15])
+            x = self.bn[i](x) #torch.Size([8, 32, 200, 15])
 
         # if viz:
         #     print(skip.shape)
@@ -904,18 +892,11 @@ class gwnet_diff_G_Fonly(nn.Module):
         #     plt.title('hidden rep')                
         #     plt.show()
 
-        # x = F.relu(skip)
-        # x = F.relu(self.end_conv_1(x))
-        # x_f = self.end_conv_2(x)
-
-        x = self.end_module(skip)    
-        x_f = self.end_mlp_f(x)#.transpose(1,3)
-
-        if self.meta is None:
-            return x_f
-
-        else:
-            return x_f, self.scattering(x_f.contiguous())#[:,:,:,self.meta[1]] # order0 only
+        x = F.relu(skip)
+        x = F.relu(self.end_conv_1(x))
+        x = self.end_conv_2(x)
+        x = self.end_conv_3(F.relu(x))
+        return x
 
 class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
     def __init__(self, device, num_nodes, dropout=0.3, supports_len=0,
@@ -955,18 +936,17 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
             new_dilation = 1 #4
             for i in range(layers):
                 # dilated convolutions
-                # TODO: change kernel_size and stride
-                self.filter_convs.append(nn.Conv2d(in_channels=residual_channels,
+                self.filter_convs.append(CausalConv2d(in_channels=residual_channels,
                                                    out_channels=dilation_channels,
                                                    kernel_size=(1,kernel_size),
                                                    # stride=(1,2),
-                                                   dilation=new_dilation))
+                                                   dilation=(1,new_dilation)))
 
-                self.gate_convs.append(nn.Conv2d(in_channels=residual_channels,
+                self.gate_convs.append(CausalConv2d(in_channels=residual_channels,
                                                  out_channels=dilation_channels,
                                                  kernel_size=(1, kernel_size), 
                                                  # stride=(1,2),
-                                                 dilation=new_dilation))
+                                                 dilation=(1,new_dilation)))
 
                 # 1x1 convolution for residual connection
                 self.residual_convs.append(nn.Conv2d(in_channels=dilation_channels,
@@ -990,90 +970,8 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
                     self.gconv.append(gcn2(dilation_channels, residual_channels, dropout,
                                                               support_len=supports_len))
 
-        # self.end_module = nn.Sequential(
-        #         # nn.Tanh(), 
-        #         nn.LeakyReLU(),
-        #         # nn.ReLU(),
-        #         nn.Conv2d(in_channels=skip_channels, out_channels=end_channels,
-        #                   kernel_size=(1,1), bias=True)
-        #         )
-
-        ## temporal transConv (de-tcn)
-        convTransK = 2
-        convTransD = 1
-        upScale = 2
-        # self.end_module = nn.Sequential(
-        #     nn.LeakyReLU(),
-        #     nn.Upsample(scale_factor=(1,upScale)),
-        #     nn.ConvTranspose2d(in_channels=skip_channels, out_channels=end_channels, 
-        #                        kernel_size=(1,convTransK), dilation=convTransD),
-        #     nn.LeakyReLU(),
-        #     nn.Upsample(scale_factor=(1,upScale)),
-        #     nn.ConvTranspose2d(in_channels=end_channels, out_channels=end_channels,
-        #                        kernel_size=(1,convTransK), dilation=convTransD),
-        #     nn.LeakyReLU(),
-        #     nn.Upsample(scale_factor=(1,upScale)),
-        #     nn.ConvTranspose2d(in_channels=end_channels, out_channels=end_channels,
-        #                        kernel_size=(1,convTransK), dilation=convTransD),
-        #     nn.LeakyReLU(),
-        #     nn.Conv2d(in_channels=end_channels, out_channels=1, kernel_size=(1,1), bias=True),
-        #     )
-        self.end_module_conv = nn.ModuleList()
-        self.end_module_gcn = nn.ModuleList()
-        self.end_module_up = nn.ModuleList()
-        # for b in range(blocks):
-        #     for l in range(layers):
-        for i in range(3):
-            self.end_module_up.append(nn.Upsample(scale_factor=(1,upScale)))
-            self.end_module_conv.append(nn.ConvTranspose2d(in_channels=skip_channels, out_channels=residual_channels, 
-                           kernel_size=(1,convTransK), dilation=convTransD))
-            self.end_module_gcn.append(gcn2(residual_channels, skip_channels, dropout,
-                                                          support_len=supports_len))
-        self.end_mlp = nn.Sequential(
-            nn.LeakyReLU(),
-            nn.Conv2d(in_channels=128, out_channels=16,
-                      kernel_size=(1,1), bias=True),
-            nn.LeakyReLU(),
-            nn.Conv2d(in_channels=16, out_channels=1,
-                      kernel_size=(1,1), bias=True)
-            )
-        # self.end_module_add = nn.Sequential(
-        #     # nn.Tanh(), 
-        #     nn.LeakyReLU(),
-        #     # nn.ReLU(),
-        #     nn.Conv2d(in_channels=end_channels, out_channels=out_dim,
-        #               kernel_size=(1,1), bias=True),
-        #     # nn.LeakyReLU(),
-        #     # # nn.ReLU(),
-        #     # nn.Conv2d(in_channels=end_channels*2, out_channels=out_dim,
-        #     #           kernel_size=(1,1), bias=True)            
-        #     )
-
-        # self.end_mlp_e = nn.Sequential(
-        #     # nn.Tanh(), 
-        #     # nn.LeakyReLU(),
-        #     # nn.ReLU(),
-        #     nn.Conv2d(in_channels=num_nodes, out_channels=out_nodes,
-        #               kernel_size=(1,1), bias=True)
-        #     )
-
-        # self.end_mlp_f = nn.Sequential(
-        #     # nn.Tanh(),
-        #     nn.LeakyReLU(),
-        #     # nn.ReLU(),
-        #     # nn.Conv2d(in_channels=end_channels, out_channels=out_dim_f,
-        #     nn.Conv2d(in_channels=15, out_channels=out_dim_f,
-        #               kernel_size=(1,1), bias=True),
-        #     # nn.LeakyReLU(),
-        #     # nn.Conv2d(in_channels=out_dim_f*4, out_channels=out_dim_f,
-        #     #           kernel_size=(1,1), bias=True)
-        #     )
-
-        # self.pooling = pool(out_dim, out_nodes, dropout, supports_len)
-        if scatter:
-            J = 3
-            Q = 9
-            self.scattering = Scattering1D(J, out_dim, Q)
+        self.end_conv_1 = nn.Conv2d(skip_channels, skip_channels//2, 1, bias=True)
+        self.end_conv_2 = nn.Conv2d(skip_channels//2, out_dim_f, 1, bias=True)
 
         self.receptive_field = receptive_field
         self.meta = meta
@@ -1102,14 +1000,16 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
                 nodevec2 = nn.Parameter(initemb2, requires_grad=True).to(self.device)
 
         ### normal forward
-        # print(self.receptive_field)
-        in_len = input.size(3)
-        if in_len<self.receptive_field:
-            x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
-        else:
-            x = input
+        # # print(self.receptive_field)
+        # in_len = input.size(3)
+        # if in_len<self.receptive_field:
+        #     x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
+        # else:
+        #     x = input
 
-        x = self.start_conv(x)
+        # x = self.start_conv(x)
+        # x = nn.functional.pad(input,(1,0,0,0))
+        x = self.start_conv(input)
 
         if viz: # x.shape [16, 32, 200, 15]
             ### plot features on different channels representing the same node fmri signal
@@ -1153,18 +1053,21 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
 
             # dilated convolution
             filter = self.filter_convs[i](residual)
-            filter = torch.tanh(filter)
+            filter = torch.tanh(filter[..., :-self.filter_convs[i].padding[1]])
             gate = self.gate_convs[i](residual)
-            gate = torch.sigmoid(gate)
+            gate = torch.sigmoid(gate[..., :-self.gate_convs[i].padding[1]])
             x = filter * gate
-            print(x.shape)
+            if i % self.layers == self.layers-1:
+                x = F.max_pool2d(x, (1,2))
 
             # parametrized skip connection
             s = x
             s = self.skip_convs[i](s)
             try:
-                ipdb.set_trace()
-                skip = skip[:, :, :,  -s.size(3):]
+                if s.size(-1)*2 == skip.size(-1):
+                    skip = F.max_pool2d(skip,(1,2))
+                else:
+                    skip = skip[..., -s.size(-1):]
             except:
                 skip = 0
             skip = s + skip
@@ -1183,7 +1086,7 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
 
             # x = x + residual[:, :, :, -x.size(3):]
             # add t representation
-            x = x + residual[:, :, :, -x.size(3):]# + t_rep
+            x = x + residual[..., -x.size(-1):]# + t_rep
             # x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
             x = self.bn[i](x) # comment off for overfitting
             # print(x.shape)
@@ -1194,54 +1097,12 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
         # ### test: adding noise to hidden rep
         # skip = skip + torch.normal(torch.zeros_like(skip), 0.1*skip.std()*torch.ones_like(skip))
         # ###
-        # x = self.end_module(skip)
-        # if viz: # x.shape [16, 512, 200, 1]
-        #     # (results look similar) each node's h-D (h being #hidden dim) feature
-        #     for j in range(10):
-        #         plt.plot(x.detach().cpu().numpy()[0,:,j,0])
-        #     plt.show()
-        #     # plot each channel's value (on all nodes)
-        #     for j in range(10): 
-        #         plt.plot(x.detach().cpu().numpy()[0,j,:,0])
-        #     plt.show()
-        
-        # if self.meta is None:
-        #     # ### F prediction
-        #     x_f = self.end_mlp_f(x).transpose(1,3)
-
-        #     ### E prediction
-        #     x = self.end_module_add(x) #[batch_size, seq_len, num_nodes, 1]
-        #     ########### USING POOL ########### 
-        #     # x = self.pooling(x, *new_supports)
-        #     ########### USING MLP ########### 
-        #     x = x.transpose(1, 2)
-        #     x1 = self.end_mlp_e(x) #[batch_size, out_nodes, seq_len, 1]
-        #     x1 = x1.transpose(1, 2)
-        #     # x2 = self.end_mlp_e2(x)
-        #     # x2 = x2.transpose(1, 2)
-        #     # x3 = self.end_mlp_e3(x)
-        #     # x3 = x3.transpose(1, 2)
-        #     return x1, x_f#, x2, x3
-
-        # else: # scatter (skip: [16, 256, 200, 1])
-        #     x = self.end_module_add(x) #[`batch_size, out_length, num_nodes, 1]
-        #     x = x.transpose(1, 2)
-        #     x = self.end_mlp_e(x)
-        #     sig = x.transpose(2,3).contiguous()
-
-        #     # ### temporal transConv
-        #     # x = x[...,:self.out_dim]        
-        #     # x = x.transpose(1, 2)
-        #     # sig = self.end_mlp_e(x)
-        #     return sig, self.scattering(sig)#[:,:,:,self.meta[1]] # order0 only            
-        # ipdb.set_trace()
+   
         x = F.relu(skip)
-        for i in range(3):#range(self.blocks * self.layers):       
-            x = self.end_module_up[i](x)
-            x = F.relu(self.end_module_conv[i](x))
-            x = self.end_module_gcn[i](x, None, *supports2)
-        
-        x = self.end_mlp(x)
-        # x = self.end_mlp_f(x.transpose(1,3))
-        # ipdb.set_trace()
+        # for i in range(3):#range(self.blocks * self.layers):       
+        #     x = self.end_module_up[i](x)
+        #     x = F.relu(self.end_module_conv[i](x))
+        #     x = self.end_module_gcn[i](x, None, *supports2)
+        x = F.relu(self.end_conv_1(x))
+        x = self.end_conv_2(x).transpose(1,2)
         return x#.transpose(1,2)

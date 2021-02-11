@@ -127,9 +127,13 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         CRASH_fname = 'CRASH_Fonly.pkl'
         try:
             with open(CRASH_fname, 'rb') as handle:
-                F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, \
-                inv_mapping, region_assignment, nTrain, nValid, \
-                nTest, scaler_in, scaler_out = pickle.load(handle)
+                if F_only:
+                    F_t, scs, adj_mx, adj_mx_idx, _input, _gt, region_assignment, nTrain, \
+                    nValid, nTest, scaler_in, scaler_out = pickle.load(handle)
+                else:
+                    F_t, scs, adj_mx, adj_mx_idx, _input, _gt, coeffs, \
+                    inv_mapping, region_assignment, nTrain, nValid, \
+                    nTest, scaler_in, scaler_out = pickle.load(handle)
 
         except:
             scs, adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
@@ -174,6 +178,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
             F_idxer = np.arange(K)[None, :] + np.arange(0, fmri_mat.shape[1] - K + 1, 
                                                         int(basic_len/F_t))[:, None]
+            ipdb.set_trace()
             fmri_mat = fmri_mat[:, F_idxer,:]
 
             if _map: # for signal mapping
@@ -197,14 +202,15 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 eeg_mat = eeg_mat[:, E_idxer, :]
                 eeg_mat = eeg_mat.reshape(-1, *eeg_mat.shape[2:])
+                ipdb.set_trace()
 
                 nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
                                                 proc_helper(fmri_mat, eeg_mat, len(adj_mx))
                 del fmri_mat, eeg_mat, F_idxer, E_idxer
                 
                 # min-max normalization
-                _input = (_input - _input.min()) / (_input.max() - _input.min())
-                _gt = (_gt - _gt.min()) / (_gt.max() - _gt.min())        
+                # _input = (_input - _input.min()) / (_input.max() - _input.min())
+                # _gt = (_gt - _gt.min()) / (_gt.max() - _gt.min())        
                 # _input = _input / np.max(np.abs(_input))
                 # _gt = _gt / np.max(np.abs(_gt))
 
@@ -224,7 +230,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 
                 nTrain, nValid, nTest, _input, _gt, scaler_in, scaler_out, adj_mx_idx = \
                                             proc_helper(fmri_mat_x, fmri_mat_y, len(adj_mx))
-                ipdb.set_trace() #F_t, scs, adj_mx, adj_mx_idx, _input, _gt, nTrain, nValid, nTest, scaler_in, scaler_out
+                ipdb.set_trace() #F_t, scs, adj_mx, adj_mx_idx, _input, _gt, region_assignment, nTrain, nValid, nTest, scaler_in, scaler_out
                 del fmri_mat_x, fmri_mat_y
 
         # region_assignment: {EEG_electrodes: brain region}
@@ -364,7 +370,6 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                 adjinit['train'] = adjinit['val'] = adjinit['test'] = None
             else:
                 adjinit['train'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[:nTrain]]) 
-                ipdb.set_trace()# TODO: adjinit['train'] need to be shuffled with train set
                 adjinit['val'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[nTrain:-nTest]])
                 adjinit['test'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[-nTest:]])
 
@@ -432,10 +437,18 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
                 iter = 0
                 # shuffle in-out-adj_idx
-                if scatter:
-                    x, y, adj_idx, _coeffs = shuffle(x, y, adj_idx, _coeffs)
+                if args.addaptadj:
+                    if not args.randomadj:
+                        # adjinit['train'] need to be shuffled with train set
+                        if scatter:
+                            x, y, adj_idx, _coeffs, adjinit['train'] = shuffle(x, y, adj_idx, _coeffs, adjinit['train'])
+                        else:
+                            x, y, adj_idx, adjinit['train'] = shuffle(x, y, adj_idx, adjinit['train'])
                 else:
-                    x, y, adj_idx = shuffle(x, y, adj_idx)
+                    if scatter:
+                        x, y, adj_idx, _coeffs = shuffle(x, y, adj_idx, _coeffs)
+                    else:
+                        x, y, adj_idx = shuffle(x, y, adj_idx)
 
                 # shuffle y, to test if model really learns anything (~random output)
                 # y = shuffle(y)

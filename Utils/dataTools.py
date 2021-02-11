@@ -313,4 +313,204 @@ class MultiModalityPrediction():
         """
         lossValue = misc.batchTimeMSELoss(yHat,y.type(torch.float64))
         return lossValue
-        
+    
+class KStepPrediction():
+    """
+    KStepPrediction: Creates the dataset for a K-step prediction problem
+
+    Initialization:
+
+    Input:
+        G (class): Graph on which to diffuse the process, needs an attribute
+            .N with the number of nodes (int) and attribute .W with the
+            adjacency matrix (np.array)
+        nTrain (int): number of training samples
+        nValid (int): number of validation samples
+        nTest (int): number of testing samples
+        horizon (int): length of the process
+        sigmaSpatial (float): spatial variance
+        sigmaTemporal (float): temporal variance
+        rhoSpatial (float): spatial correlation
+        rhoTemporal (float): temporal correlation
+        dataType (dtype): datatype for the samples created (default: np.float64)
+        device (device): if torch.Tensor datatype is selected, this is on what
+            device the data is saved.
+
+    Methods:
+
+    signals, labels = .getSamples(samplesType[, optionalArguments])
+        Input:
+            samplesType (string): 'train', 'valid' or 'test' to determine from
+                which dataset to get the samples from
+            optionalArguments:
+                0 optional arguments: get all the samples from the specified set
+                1 optional argument (int): number of samples to get (at random)
+                1 optional argument (list): specific indices of samples to get
+        Output:
+            signals (dtype.array): numberSamples x numberNodes
+            labels (dtype.array): numberSamples
+            >> Obs.: The 0th dimension matches the corresponding signal to its
+                respective label
+
+    .astype(type): change the type of the data matrix arrays.
+        Input:
+            type (dtype): target type of the variables (e.g. torch.float64,
+                numpy.float64, etc.)
+
+    .to(device): if dtype is torch.tensor, move them to the specified device.
+        Input:
+            device (string): target device to move the variables to (e.g. 'cpu',
+                'cuda:0', etc.)
+
+    RMSE = .evaluate(yHat, y, tol = 1e-9)
+        Input:
+            yHat (dtype.array): estimated labels (1-D binary vector)
+            y (dtype.array): correct labels (1-D binary vector)
+            >> Obs.: both arrays are of the same length
+            tol (float): numerical tolerance to consider two numbers to be equal
+        Output:
+            RMSE (float): root mean square error between y and yHat
+
+    """
+
+    def __init__(self, K, G, nTrain, nValid, nTest, horizon, sigmaSpatial = 1, sigmaTemporal = 0,
+                 rhoSpatial = 0, rhoTemporal = 0, dataType = np.float64, device = 'cpu'):
+        # store attributes
+        self.dataType = dataType
+        self.device = device
+        self.K = K
+        self.nTrain = nTrain
+        self.nValid = nValid
+        self.nTest = nTest
+        self.horizon = horizon
+        self.sigmaSpatial = sigmaSpatial
+        self.sigmaTemporal = sigmaTemporal
+        self.rhoSpatial = rhoSpatial
+        self.rhoTemporal = rhoTemporal
+        #\\\ Generate the samples
+        # Get the largest eigenvalue of the weighted adjacency matrix
+        EW, VW = graph.computeGFT(G.W, order = 'totalVariation')
+        eMax = np.max(EW)
+        # Normalize the matrix so that it doesn't explode
+        Wnorm = G.W / eMax
+        # total number of samples
+        nTotal = nTrain + nValid + nTest
+        # x_0
+        x_t = np.random.rand(nTotal,G.N);
+        x = x_t
+        # Temporal noise
+        tempNoise = np.random.multivariate_normal(np.zeros(self.horizon),
+                                                  np.power(self.sigmaTemporal,2)*np.eye(self.horizon) + 
+                                                  np.power(self.rhoTemporal,2)*np.ones((self.horizon,self.horizon)),
+                                                  (nTotal, G.N))
+        tempNoise = np.transpose(tempNoise, (2,0,1))
+        # Create LS
+        A = Wnorm # = A x_t + w (Gaussian noise)
+        for t in range(self.horizon):
+            spatialNoise = np.random.multivariate_normal(np.zeros(G.N), 
+                                 np.power(self.sigmaSpatial,2)*np.eye(G.N) + 
+                                 np.power(self.rhoSpatial,2)*np.ones((G.N,G.N)), nTotal)
+
+            x_tplus1 = np.matmul(x_t,A) + spatialNoise + tempNoise[t, :, :]
+            x_t = x_tplus1
+            
+            x = np.concatenate((x,x_t),axis=1)
+        y = x[:,K*G.N:horizon*G.N]
+        x = x[:,0:(horizon*G.N-K*G.N)] 
+        # Now, we have the signals and the labels
+        signals = x # nTotal x N (CS notation)
+        labels = y
+        # Split and save them
+        self.samples = {}
+        self.samples['train'] = {}
+        self.samples['train']['signals'] = signals[0:nTrain, :]
+        self.samples['train']['labels'] = labels[0:nTrain, :]
+        self.samples['valid'] = {} 
+        self.samples['valid']['signals'] = signals[nTrain:nTrain+nValid, :]
+        self.samples['valid']['labels'] = labels[nTrain:nTrain+nValid, :]
+        self.samples['test'] = {}
+        self.samples['test']['signals'] = signals[nTrain+nValid:nTotal, :]
+        self.samples['test']['labels'] = labels[nTrain+nValid:nTotal, :]
+        # Change data to specified type and device
+        self.astype(self.dataType)
+        self.to(self.device)
+
+    def getSamples(self, samplesType, *args):
+        # type: train, valid, test
+        # args: 0 args, give back all
+        # args: 1 arg: if int, give that number of samples, chosen at random
+        # args: 1 arg: if list, give those samples precisely.
+        # Check that the type is one of the possible ones
+        assert samplesType == 'train' or samplesType == 'valid' \
+                    or samplesType == 'test'
+        # Check that the number of extra arguments fits
+        assert len(args) <= 1
+        # If there are no arguments, just return all the desired samples
+        x = self.samples[samplesType]['signals']
+        y = self.samples[samplesType]['labels']
+        # If there's an argument, we have to check whether it is an int or a
+        # list
+        if len(args) == 1:
+            # If it is an int, just return that number of randomly chosen
+            # samples.
+            if type(args[0]) == int:
+                nSamples = x.shape[0] # total number of samples
+                # We can't return more samples than there are available
+                assert args[0] <= nSamples
+                # Randomly choose args[0] indices
+                selectedIndices = np.random.choice(nSamples, size = args[0],
+                                                   replace = False)
+                # The reshape is to avoid squeezing if only one sample is
+                # requested
+                x = x[selectedIndices,:].reshape([args[0], x.shape[1]])
+                y = y[selectedIndices]
+            else:
+                # The fact that we put else here instead of elif type()==list
+                # allows for np.array to be used as indices as well. In general,
+                # any variable with the ability to index.
+                x = x[args[0], :]
+                # If only one element is selected, avoid squeezing. Given that
+                # the element can be a list (which has property len) or an
+                # np.array (which doesn't have len, but shape), then we can
+                # only avoid squeezing if we check that it has been sequeezed
+                # (or not)
+                if len(x.shape) == 1:
+                    x = x.reshape([1, x.shape[0]])
+                # And assign the labels
+                y = y[args[0]]
+
+        return x, y
+
+    def astype(self, dataType):
+        if repr(dataType).find('torch') == -1:
+            for key in self.samples.keys():
+                for secondKey in self.samples[key].keys():
+                    self.samples[key][secondKey] \
+                                            = dataType(self.samples[key][secondKey])
+        else:
+            for key in self.samples.keys():
+                for secondKey in self.samples[key].keys():
+                    self.samples[key][secondKey] \
+                         = torch.tensor(self.samples[key][secondKey]).type(dataType)
+
+        if dataType is not self.dataType:
+            self.dataType = dataType
+
+    def to(self, device):
+        # This can only be done if they are torch tensors
+        if repr(self.dataType).find('torch') >= 0:
+            for key in self.samples.keys():
+                for secondKey in self.samples[key].keys():
+                    self.samples[key][secondKey] \
+                                       = self.samples[key][secondKey].to(device)
+
+            # If the device changed, save it.
+            if device is not self.device:
+                self.device = device
+
+    def evaluate(self, yHat, y, tol = 1e-9):
+        """
+        Return the MSE loss
+        """
+        lossValue = misc.batchTimeMSELoss(yHat,y.type(torch.float64))
+        return lossValue

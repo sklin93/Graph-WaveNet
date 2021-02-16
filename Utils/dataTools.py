@@ -373,7 +373,7 @@ class KStepPrediction():
 
     """
 
-    def __init__(self, K, G, nTrain, nValid, nTest, horizon, sigmaSpatial = 1, sigmaTemporal = 0,
+    def __init__(self, G, K, nTrain, nValid, nTest, horizon, sigmaSpatial = 1, sigmaTemporal = 0,
                  rhoSpatial = 0, rhoTemporal = 0, dataType = np.float64, device = 'cpu'):
         # store attributes
         self.dataType = dataType
@@ -397,7 +397,7 @@ class KStepPrediction():
         nTotal = nTrain + nValid + nTest
         # x_0
         x_t = np.random.rand(nTotal,G.N);
-        x = x_t
+        x = [x_t]
         # Temporal noise
         tempNoise = np.random.multivariate_normal(np.zeros(self.horizon),
                                                   np.power(self.sigmaTemporal,2)*np.eye(self.horizon) + 
@@ -406,31 +406,33 @@ class KStepPrediction():
         tempNoise = np.transpose(tempNoise, (2,0,1))
         # Create LS
         A = Wnorm # = A x_t + w (Gaussian noise)
-        for t in range(self.horizon):
+        for t in range(self.horizon-1):
             spatialNoise = np.random.multivariate_normal(np.zeros(G.N), 
                                  np.power(self.sigmaSpatial,2)*np.eye(G.N) + 
                                  np.power(self.rhoSpatial,2)*np.ones((G.N,G.N)), nTotal)
 
             x_tplus1 = np.matmul(x_t,A) + spatialNoise + tempNoise[t, :, :]
             x_t = x_tplus1
-            
-            x = np.concatenate((x,x_t),axis=1)
-        y = x[:,K*G.N:horizon*G.N]
-        x = x[:,0:(horizon*G.N-K*G.N)] 
+            x.append(x_t)
+        
+        x = np.stack(x, axis=-1)
+        # y = x[...,K:horizon]
+        # x = x[...,0:(horizon-K)] 
+
         # Now, we have the signals and the labels
         signals = x # nTotal x N (CS notation)
-        labels = y
+        # labels = y
         # Split and save them
         self.samples = {}
         self.samples['train'] = {}
         self.samples['train']['signals'] = signals[0:nTrain, :]
-        self.samples['train']['labels'] = labels[0:nTrain, :]
+        # self.samples['train']['labels'] = labels[0:nTrain, :]
         self.samples['valid'] = {} 
         self.samples['valid']['signals'] = signals[nTrain:nTrain+nValid, :]
-        self.samples['valid']['labels'] = labels[nTrain:nTrain+nValid, :]
+        # self.samples['valid']['labels'] = labels[nTrain:nTrain+nValid, :]
         self.samples['test'] = {}
         self.samples['test']['signals'] = signals[nTrain+nValid:nTotal, :]
-        self.samples['test']['labels'] = labels[nTrain+nValid:nTotal, :]
+        # self.samples['test']['labels'] = labels[nTrain+nValid:nTotal, :]
         # Change data to specified type and device
         self.astype(self.dataType)
         self.to(self.device)
@@ -447,7 +449,7 @@ class KStepPrediction():
         assert len(args) <= 1
         # If there are no arguments, just return all the desired samples
         x = self.samples[samplesType]['signals']
-        y = self.samples[samplesType]['labels']
+        # y = self.samples[samplesType]['labels']
         # If there's an argument, we have to check whether it is an int or a
         # list
         if len(args) == 1:
@@ -463,7 +465,7 @@ class KStepPrediction():
                 # The reshape is to avoid squeezing if only one sample is
                 # requested
                 x = x[selectedIndices,:].reshape([args[0], x.shape[1]])
-                y = y[selectedIndices]
+                # y = y[selectedIndices]
             else:
                 # The fact that we put else here instead of elif type()==list
                 # allows for np.array to be used as indices as well. In general,
@@ -477,9 +479,9 @@ class KStepPrediction():
                 if len(x.shape) == 1:
                     x = x.reshape([1, x.shape[0]])
                 # And assign the labels
-                y = y[args[0]]
+                # y = y[args[0]]
 
-        return x, y
+        return x#, y
 
     def astype(self, dataType):
         if repr(dataType).find('torch') == -1:

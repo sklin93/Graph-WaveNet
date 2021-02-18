@@ -144,7 +144,7 @@ class trainer():
         if scatter == True:
             assert self.meta is not None, 'need meta info if using scattering'
         self.scatter = scatter
-        self.F_only = True#F_only
+        self.F_only = F_only
 
     def train(self, input, real_val):
         self.model.train()
@@ -331,9 +331,8 @@ class trainer():
                 # plt.plot(E[0,1].detach().cpu().numpy())
                 # plt.show()
                 # condition = Variable(torch.ones(1, 1), requires_grad=False).to(self.device) # for CosineEmbeddingLoss
-                # loss = self.loss(E, real_E) #+ self.loss(F, real_F)#+ self.loss2(E, real_E)
-                ipdb.set_trace()
-                loss = self.loss(F, real_F)
+                loss = self.loss(E, real_E) #+ self.loss(F, real_F)#+ self.loss2(E, real_E)
+                # loss = self.loss(F, real_F)
 
         else: # with scattering
             # loss = self.loss(E, real_E[0], 0.0) + self.loss(predict[...,self.meta[0],:], real_E[1][...,self.meta[0],:], 0.0)\
@@ -579,20 +578,21 @@ class trainer():
         ##### loss #####
         if self.meta is None:
             if viz:
-                # for recursive pred
-                cur_in = input
-                for i in range(real_F.shape[1]):
-                    with torch.no_grad():
-                        output = self.model(cur_in, supports, aptinit)
-                    cur_in = torch.cat((cur_in, output),-1)[...,1:]
-                F = cur_in.squeeze().transpose(1,2)
+                # # for recursive pred
+                # cur_in = input
+                # for i in range(real_F.shape[1]):
+                #     with torch.no_grad():
+                #         output = self.model(cur_in, supports, aptinit)
+                #     cur_in = torch.cat((cur_in, output),-1)[...,1:]
+                # F = cur_in.squeeze().transpose(1,2)
+                # # ipdb.set_trace()
+                # for j in range(5):
+                #     plt.plot(F.squeeze()[0,:,j].cpu().numpy(), 'r')
+                #     plt.plot(real_F.squeeze()[0,:,j].cpu().numpy(), 'g')
+                #     plt.show()
+                # print(util.get_cc(F, real_F))
                 # ipdb.set_trace()
-                for j in range(5):
-                    plt.plot(F.squeeze()[0,:,j].cpu().numpy(), 'r')
-                    plt.plot(real_F.squeeze()[0,:,j].cpu().numpy(), 'g')
-                    plt.show()
-                print(util.get_cc(F, real_F))
-                ipdb.set_trace()
+
                 # plt.figure('pred')
                 # for j in range(10):
                 #     if self.F_only:
@@ -609,6 +609,7 @@ class trainer():
 
                 # see if different inputs have the same output..
                 if not self.F_only:
+                    ipdb.set_trace()
                     plt.plot(E[0,:,0].cpu().numpy())
                     plt.plot(E[1,:,0].cpu().numpy())
                     plt.show()                
@@ -625,8 +626,8 @@ class trainer():
                 real_E = real_E.to(self.device).squeeze()
                 real_F = real_F.to(self.device).squeeze()
                 # condition = Variable(torch.ones(1, 1), requires_grad=False).to(self.device) # for CosineEmbeddingLoss
-                # loss = self.loss(E, real_E) #+ self.loss(F, real_F) #+ self.loss(F, real_F)
-                loss = self.loss(F, real_F)
+                loss = self.loss(E, real_E) #+ self.loss(F, real_F) #+ self.loss(F, real_F)
+                # loss = self.loss(F, real_F)
 
         else: # with scattering
             real_E[0] = real_E[0].squeeze()

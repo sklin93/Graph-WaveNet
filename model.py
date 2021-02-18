@@ -2,12 +2,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import math
 from torch.autograd import Variable
 from torch.utils.checkpoint import checkpoint
 from kymatio.torch import Scattering1D
 import sys
 import matplotlib.pyplot as plt
 import ipdb
+
+# Fourier feature mapping
+def fourier_mapping(x, B):
+    if B is None:
+        return x
+    else:
+        x_proj = torch.einsum('ncvl,cw->nwvl',(2.*math.pi*x,B.T))
+#         x_proj = (2.*math.pi*x) @ B.T
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], axis=1)
 
 class nconv(nn.Module):
     def __init__(self):
@@ -279,7 +289,8 @@ class gwnet_diff_G(nn.Module):
                 gcn_bool=True, addaptadj=True,
                 in_dim=2, out_dim=12, out_dim_f=5,
                 residual_channels=32, dilation_channels=32, skip_channels=256,
-                end_channels=512, kernel_size=2, blocks=4, layers=2,
+                # end_channels=512, kernel_size=2, blocks=4, layers=2,
+                end_channels=2048, kernel_size=2, blocks=4, layers=2,
                 out_nodes=64, meta=None, scatter=False):
 
         super(gwnet_diff_G, self).__init__()
@@ -301,6 +312,10 @@ class gwnet_diff_G(nn.Module):
         self.gconv = nn.ModuleList()
         self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)
 
+        if self.gcn_bool and self.addaptadj:
+            self.nodevec = nn.Parameter(torch.randn(10, 10).to(self.device), 
+                                    requires_grad=True).to(self.device)
+
         self.start_conv = nn.Conv2d(in_channels=in_dim,
                                     out_channels=residual_channels,
                                     kernel_size=(1,1))
@@ -313,17 +328,17 @@ class gwnet_diff_G(nn.Module):
             for i in range(layers):
                 # dilated convolutions
                 # TODO: change kernel_size and stride
-                self.filter_convs.append(nn.Conv2d(in_channels=residual_channels,
+                self.filter_convs.append(CausalConv2d(in_channels=residual_channels,
                                                    out_channels=dilation_channels,
                                                    kernel_size=(1,kernel_size),
                                                    # stride=(1,2),
-                                                   dilation=new_dilation))
+                                                   dilation=(1,new_dilation)))
 
-                self.gate_convs.append(nn.Conv2d(in_channels=residual_channels,
+                self.gate_convs.append(CausalConv2d(in_channels=residual_channels,
                                                  out_channels=dilation_channels,
                                                  kernel_size=(1, kernel_size), 
                                                  # stride=(1,2),
-                                                 dilation=new_dilation))
+                                                 dilation=(1,new_dilation)))
 
                 # 1x1 convolution for residual connection
                 self.residual_convs.append(nn.Conv2d(in_channels=dilation_channels,
@@ -347,6 +362,8 @@ class gwnet_diff_G(nn.Module):
                     self.gconv.append(gcn2(dilation_channels, residual_channels, dropout,
                                                               support_len=supports_len))
 
+        self.B = 10*np.random.normal(size=(skip_channels*2, skip_channels)).astype(np.float32)
+        self.B = torch.tensor(self.B).to(device)
         # self.end_module = nn.Sequential(
         #     # nn.Tanh(), 
         #     nn.LeakyReLU(),
@@ -363,7 +380,7 @@ class gwnet_diff_G(nn.Module):
                 # nn.Tanh(), 
                 nn.LeakyReLU(),
                 # nn.ReLU(),
-                nn.Conv2d(in_channels=skip_channels, out_channels=end_channels,
+                nn.Conv2d(in_channels=skip_channels*4, out_channels=end_channels,
                           kernel_size=(1,1), bias=True)
                 )     
         # ## temporal transConv
@@ -457,9 +474,9 @@ class gwnet_diff_G(nn.Module):
         def custom_forward(residual, dummy_tensor):
             # dilated convolution
             filter = filter_conv(residual)
-            filter = torch.tanh(filter)
+            filter = torch.tanh(filter[..., :-filter_conv.padding[1]])
             gate = gate_conv(residual)
-            gate = torch.sigmoid(gate)
+            gate = torch.sigmoid(gate[..., :-gate_conv.padding[1]])
             x = filter * gate
 
             return x
@@ -517,21 +534,21 @@ class gwnet_diff_G(nn.Module):
         if self.gcn_bool and self.addaptadj:
             if supports is None:
                     supports = []
-            if aptinit is None:
-                nodevec1 = nn.Parameter(torch.randn(batch_size, 
-                                        self.num_nodes, 10).to(self.device), 
-                                        requires_grad=True).to(self.device)
-                nodevec2 = nn.Parameter(torch.randn(batch_size, 
-                                        10, self.num_nodes).to(self.device), 
-                                        requires_grad=True).to(self.device)
+            # if aptinit is None:
+            #     nodevec1 = nn.Parameter(torch.randn(batch_size, 
+            #                             self.num_nodes, 10).to(self.device), 
+            #                             requires_grad=True).to(self.device)
+            #     nodevec2 = nn.Parameter(torch.randn(batch_size, 
+            #                             10, self.num_nodes).to(self.device), 
+            #                             requires_grad=True).to(self.device)
 
-            else:
-                m, p, n = torch.svd(aptinit)
-                _p = torch.diag_embed(p[:, :10] ** 0.5)
-                initemb1 = torch.bmm(m[:, :, :10], _p)
-                initemb2 = torch.bmm(_p, torch.transpose(n[:, :, :10], 1, 2))
-                nodevec1 = nn.Parameter(initemb1, requires_grad=True).to(self.device)
-                nodevec2 = nn.Parameter(initemb2, requires_grad=True).to(self.device)
+            # else:
+            #     m, p, n = torch.svd(aptinit)
+            #     _p = torch.diag_embed(p[:, :10] ** 0.5)
+            #     initemb1 = torch.bmm(m[:, :, :10], _p)
+            #     initemb2 = torch.bmm(_p, torch.transpose(n[:, :, :10], 1, 2))
+            #     nodevec1 = nn.Parameter(initemb1, requires_grad=True).to(self.device)
+            #     nodevec2 = nn.Parameter(initemb2, requires_grad=True).to(self.device)
 
         ### normal forward
         # print(self.receptive_field)
@@ -563,13 +580,17 @@ class gwnet_diff_G(nn.Module):
         # calculate the current adaptive adj matrix once per iteration
         new_supports = None
         if self.gcn_bool and self.addaptadj:
-            adp = F.softmax(F.relu(torch.matmul(nodevec1, nodevec2)), dim=2)
+            nodevec = torch.einsum('ncl,lv->ncv', (input[:,0,...],self.nodevec))
+            adp = F.softmax(F.relu(torch.matmul(nodevec, nodevec.transpose(1,2))), dim=2)
+            # if viz:
+            #     ipdb.set_trace()
+            #     plt.imshow(adp[0].detach().cpu().numpy())
+            #     plt.show()
             if len(supports) > 0:
                 new_supports = supports + [adp]
             else:
                 new_supports = [adp]
             del adp
-            del nodevec1, nodevec2
 
         # WaveNet layers
         for i in range(self.blocks * self.layers):
@@ -604,10 +625,16 @@ class gwnet_diff_G(nn.Module):
             # del filter
             # del gate
 
+            if i % self.layers == self.layers-1:
+                x = F.max_pool2d(x, (1,2))
             # parametrized skip connection
-            s = self.skip_convs[i](x)
+            s = x
+            s = self.skip_convs[i](s)
             try:
-                skip = skip[:, :, :,  -s.size(3):]
+                if s.size(-1)*2 == skip.size(-1):
+                    skip = F.max_pool2d(skip,(1,2))
+                else:
+                    skip = skip[..., -s.size(-1):]
             except:
                 skip = 0
             skip = s + skip
@@ -640,7 +667,12 @@ class gwnet_diff_G(nn.Module):
         # ### test: adding noise to hidden rep
         # skip = skip + torch.normal(torch.zeros_like(skip), 0.1*skip.std()*torch.ones_like(skip))
         # ###
-        x = self.end_module(skip)
+        x = skip
+        x = F.relu(x)
+        x = fourier_mapping(x,self.B)
+
+        x = self.end_module(x)
+
         if viz: # x.shape [16, 512, 200, 1]
             # (results look similar) each node's h-D (h being #hidden dim) feature
             for j in range(10):

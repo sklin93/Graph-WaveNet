@@ -124,7 +124,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             basic_len = 1456 #hard-coded for 1/6 subsample
         else:
             basic_len = 2912
-        CRASH_fname = 'CRASH_FE_filtered_subsampled.pkl'
+        CRASH_fname = 'CRASH_FE_filtered_subsampled.tmp.pkl'
         try:
             with open(CRASH_fname, 'rb') as handle:
                 if F_only:

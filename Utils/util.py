@@ -451,7 +451,7 @@ def load_dataset_CRASH(adjtype, pad_seq=False):
     fmri_mat = np.stack(fmri_mat)
     eeg_mat = np.stack(eeg_mat)
     scs = np.stack(scs)
-
+    ipdb.set_trace()
     ''' dealing with huge spikes in the data'''
     valid_e_idx = []
     for i in range(len(eeg_mat)):

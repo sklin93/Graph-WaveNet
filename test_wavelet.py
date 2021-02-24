@@ -9,24 +9,57 @@ from kymatio.torch import Scattering1D
 import pywt
 import ipdb
 
-CRASH_fname = 'CRASH_FE_filtered_subsampled_single.pkl'
+# CRASH_fname = 'CRASH_FE_filtered_subsampled_single.pkl'
 
-with open(CRASH_fname, 'rb') as handle:
-    F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, \
-    inv_mapping, region_assignment, nTrain, nValid, \
-    nTest, scaler_in, scaler_out = pickle.load(handle)
+# with open(CRASH_fname, 'rb') as handle:
+#     F_t, adj_mx, adj_mx_idx, _input, _gt, coeffs, \
+#     inv_mapping, region_assignment, nTrain, nValid, \
+#     nTest, scaler_in, scaler_out = pickle.load(handle)
 
+eeg_mat = np.load('eeg_mat.npy')
+# plt.plot(x)
+# plt.show()
 
-x = _gt[0,:,0][:500]
-plt.plot(x)
-plt.show()
-
-J = 3
+x = eeg_mat[0,:,0][:10000]
+y = eeg_mat[0,:,1][:10000]
+J = 5
 Q = 9
 scattering = Scattering1D(J, len(x), Q)
+x = torch.from_numpy(x).contiguous()
+y = torch.from_numpy(y).contiguous()
+Sx = scattering(x)
+Sy = scattering(y)
+print(Sx.shape)
+print(scattering.meta()['order'], (scattering.meta()['order']==1).sum())
 ipdb.set_trace()
+plt.figure()
+plt.plot(x)
+plt.figure()
+plt.plot(Sx[0])
+plt.show()
+
+plt.plot(Sx[0])
+plt.plot(Sy[0])
+plt.show()
+
+plt.figure()
+plt.imshow(Sx[1:34])
+plt.figure()
+plt.imshow(Sy[1:34])
+plt.show()
+
+plt.figure()
+plt.imshow(Sx[34:])
+plt.figure()
+plt.imshow(Sy[34:])
+plt.show()
+
+ipdb.set_trace()
+
 t1, t2 = pywt.dwt(x, 'db12')
 rec = pywt.idwt(t1, t2,'db12')
+
+coef, f = pywt.cwt(x, np.arange(30), 'cmor1.5-1.0')
 '''
 x = torch.from_numpy(x).contiguous()
 Sx = scattering(x)

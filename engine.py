@@ -307,7 +307,7 @@ class trainer():
         # output = self.model(input) # validate SC
 
         if self.F_only:
-            F = output.squeeze()
+            F = output[0].squeeze()
         else:
             if self.meta is None:
                 E = output[0].squeeze()
@@ -319,7 +319,7 @@ class trainer():
         ##### loss #####
         if self.meta is None:
             if self.F_only:
-                real_F = real_F[:,0,:].to(self.device).squeeze() # single pred: real_F[:,0,:]
+                real_F = real_F.to(self.device).squeeze() # single pred: real_F[:,0,:]
                 # plt.plot(F[0,0].detach().cpu().numpy())
                 # plt.plot(F[0,1].detach().cpu().numpy())
                 # plt.show()
@@ -566,7 +566,7 @@ class trainer():
         predict = None # E's scattering coefficients
 
         if self.F_only:
-            F = output.squeeze()
+            F = output[0].squeeze()
         else:
             if self.meta is None:
                 E = output[0].squeeze()
@@ -593,19 +593,19 @@ class trainer():
                 # print(util.get_cc(F, real_F))
                 # ipdb.set_trace()
 
-                # plt.figure('pred')
-                # for j in range(10):
-                #     if self.F_only:
-                #         plt.plot(F[0,:,j].cpu().numpy())
-                #     else:
-                #         plt.plot(E[0,:,j].cpu().numpy())
-                # plt.figure('gt')
-                # for j in range(10):
-                #     if self.F_only:
-                #         plt.plot(real_F[0,:,j].cpu().numpy())
-                #     else:
-                #         plt.plot(real_E[0,:,j].cpu().numpy())
-                # plt.show()
+                plt.figure('pred')
+                for j in range(10):
+                    if self.F_only:
+                        plt.plot(F[0,:,j].cpu().numpy())
+                    else:
+                        plt.plot(E[0,:,j].cpu().numpy())
+                plt.figure('gt')
+                for j in range(10):
+                    if self.F_only:
+                        plt.plot(real_F[0,:,j].cpu().numpy())
+                    else:
+                        plt.plot(real_E[0,:,j].cpu().numpy())
+                plt.show()
 
                 # see if different inputs have the same output..
                 if not self.F_only:
@@ -618,9 +618,10 @@ class trainer():
                     plt.show()
                     plt.plot(real_F.squeeze()[0,0].cpu().numpy())
                     plt.plot(F[0,0].cpu().numpy())
-                ipdb.set_trace()          
+                # ipdb.set_trace()
+                # plot 
             if self.F_only:
-                real_F = real_F[:,0,:].to(self.device).squeeze() # single pred: real_F[:,0,:]
+                real_F = real_F.to(self.device).squeeze() # single pred: real_F[:,0,:]
                 loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()
@@ -657,7 +658,7 @@ class trainer():
                 mape = util.masked_mape(E,real_E,0).item()
                 rmse = util.masked_rmse(E,real_E,0).item()
                 cc, _, _ = util.get_cc(E, real_E)
-        return loss.item(), mae, mape, rmse, cc, F, E, predict
+        return loss.item(), mae, mape, rmse, cc, output[1], F, E, predict
     
     
     ### sameG debugging purpose

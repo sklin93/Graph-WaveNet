@@ -124,7 +124,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             basic_len = 1456 #hard-coded for 1/6 subsample
         else:
             basic_len = 2912
-        CRASH_fname = 'CRASH_FE_filtered_subsampled.tmp.pkl'
+        CRASH_fname = 'CRASH_Fonly.pkl'
         try:
             with open(CRASH_fname, 'rb') as handle:
                 if F_only:
@@ -897,6 +897,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         pred_Fs = []
         pred_Es = []
         pred_coeffs = []
+        adpa = []
 
         engine.set_state('test')
         x = _input[-nTest:]
@@ -940,6 +941,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             amae.append(metrics[1])
             amape.append(metrics[2])
             armse.append(metrics[3])
+            adpa.append(metrics[5])
 
             if F_only:
                 real_Fs.append(_y)
@@ -990,6 +992,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         plt.show()                            
                     ipdb.set_trace()
 
+        ipdb.set_trace()
         real_Fs = torch.stack(real_Fs).cpu().numpy()
         real_Fs = real_Fs.reshape(-1, *real_Fs.shape[2:])
         real_Es = torch.stack(real_Es).cpu().numpy()
@@ -1227,7 +1230,7 @@ if __name__ == "__main__":
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
 
-    # main(scatter=False, _map=False, F_only=True) # F prediction
-    main(scatter=False, _map=True, F_only=False, subsample=6)
+    main(scatter=False, _map=False, F_only=True, model_name='garage/CRASH_epoch_49_0.55.pth', finetune=True) # F prediction
+    # main(scatter=False, _map=True, F_only=False, subsample=6)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

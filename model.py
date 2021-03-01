@@ -810,7 +810,7 @@ class gwnet_diff_G_Fonly(nn.Module):
 
         self.end_conv_1 = nn.Conv2d(skip_channels, skip_channels//2, 1, bias=True)
         self.end_conv_2 = nn.Conv2d(skip_channels//2, out_dim_f, 1, bias=True)
-        self.end_conv_3 = nn.Conv2d(out_dim_f, 1, 1, bias=True)
+        # self.end_conv_3 = nn.Conv2d(out_dim_f, 1, 1, bias=True)
 
         self.receptive_field = receptive_field
 
@@ -835,10 +835,14 @@ class gwnet_diff_G_Fonly(nn.Module):
         if self.gcn_bool and self.addaptadj:
             nodevec = torch.einsum('ncl,lv->ncv', (input[:,0,...],self.nodevec))
             adp = F.softmax(F.relu(torch.matmul(nodevec, nodevec.transpose(1,2))), dim=2)
-            # if viz:
-            #     ipdb.set_trace()
-            #     plt.imshow(adp[0].detach().cpu().numpy())
-            #     plt.show()
+            if viz: 
+                plt.imshow(adp[0].detach().cpu().numpy())
+                plt.show()
+                # ipdb.set_trace()
+                # adp.sum(1)
+                # _, idx = torch.sort(adp.sum(1)) 
+                # top10 = idx.cpu().numpy()[:,::-1][:,:10]
+
             if len(supports) > 0:
                 new_supports = supports + [adp]
             else:
@@ -927,8 +931,9 @@ class gwnet_diff_G_Fonly(nn.Module):
         x = F.relu(skip)
         x = F.relu(self.end_conv_1(x))
         x = self.end_conv_2(x)
-        x = self.end_conv_3(F.relu(x))
-        return x
+        # x = self.end_conv_3(F.relu(x))
+
+        return x, new_supports[-1]#.sum(1)
 
 class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
     def __init__(self, device, num_nodes, dropout=0.3, supports_len=0,

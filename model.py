@@ -838,7 +838,7 @@ class gwnet_diff_G_Fonly(nn.Module):
             if viz: 
                 plt.imshow(adp[0].detach().cpu().numpy())
                 plt.show()
-                # ipdb.set_trace()
+                ipdb.set_trace()
                 # adp.sum(1)
                 # _, idx = torch.sort(adp.sum(1)) 
                 # top10 = idx.cpu().numpy()[:,::-1][:,:10]

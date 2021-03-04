@@ -59,7 +59,7 @@ ipdb.set_trace()
 t1, t2 = pywt.dwt(x, 'db12')
 rec = pywt.idwt(t1, t2,'db12')
 
-coef, f = pywt.cwt(x, np.arange(30), 'cmor1.5-1.0')
+coef, f = pywt.cwt(x, np.arange(1,30), 'cmor1.5-1.0')
 '''
 x = torch.from_numpy(x).contiguous()
 Sx = scattering(x)

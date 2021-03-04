@@ -87,7 +87,8 @@ class trainer():
             out_dim = seq_length
 
             if F_only:
-                self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, supports_len, batch_size,
+                # self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, supports_len, batch_size,
+                self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, 1, batch_size, #validate SC (support_len=1)
                                    gcn_bool=gcn_bool, addaptadj=addaptadj,
                                    in_dim=in_dim, out_dim=out_dim, out_dim_f=out_dim_f,
                                    residual_channels=nhid, dilation_channels=nhid, 
@@ -303,8 +304,8 @@ class trainer():
             if aptinit is not None:
                 aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
-        output = self.model(input, supports, aptinit)
-        # output = self.model(input) # validate SC
+        # output = self.model(input, supports, aptinit)
+        output = self.model(input) # validate SC
 
         if self.F_only:
             F = output[0].squeeze()
@@ -558,8 +559,8 @@ class trainer():
                 aptinit = torch.Tensor(aptinit[adj_idx]).to(self.device)
 
         with torch.no_grad():
-            output = self.model(input, supports, aptinit, viz=viz)
-            # output = self.model(input) # validate SC
+            # output = self.model(input, supports, aptinit, viz=viz)
+            output = self.model(input, viz=viz) # validate SC
 
         F = None
         E = None

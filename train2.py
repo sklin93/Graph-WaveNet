@@ -353,7 +353,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         
     if args.data == 'CRASH':
         # separate adj matrices into train-val-test samples
-
+        ipdb.set_trace()
         _adj = [[] for i in range(len(adj_mx[0]))]
         for a in adj_mx:
             for i in range(len(_adj)):
@@ -992,7 +992,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                         plt.show()                            
                     ipdb.set_trace()
 
-        ipdb.set_trace()
+        ipdb.set_trace() # torch.cat(adpa).cpu().numpy()
         real_Fs = torch.stack(real_Fs).cpu().numpy()
         real_Fs = real_Fs.reshape(-1, *real_Fs.shape[2:])
         real_Es = torch.stack(real_Es).cpu().numpy()
@@ -1230,7 +1230,7 @@ if __name__ == "__main__":
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
 
-    main(scatter=False, _map=False, F_only=True, model_name='garage/CRASH_epoch_7_0.57.pth', finetune=True) # F prediction
+    main(scatter=False, _map=False, F_only=True, model_name='garage/CRASH_epoch_13_0.56.pth', finetune=True) # F prediction
     # main(scatter=False, _map=True, F_only=False, subsample=6)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

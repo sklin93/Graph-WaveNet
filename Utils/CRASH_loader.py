@@ -186,7 +186,7 @@ def get_eeg(comn_ids):
 
     return eeg_data
 
-def get_fmri_bold(comn_ids, atlas):
+def get_fmri_bold(comn_ids, atlas, task_name='rest'):
     '''
     fMRI time series on the voxel level
     fmri_data['time_res']
@@ -207,7 +207,7 @@ def get_fmri_bold(comn_ids, atlas):
         for sess_dir in sess_dirs:
             cur_sess_num = int(sess_dir.split(os.path.sep)[-1].split('-')[-1])
             name = glob.glob(os.path.join(sess_dir, 'func',
-                        '0_sub-*_rest_bold_MNI_3mm.nii.gz'))
+                        '0_sub-*_'+task_name+'_bold_MNI_3mm.nii.gz'))
             if len(name) != 1:
                 print('>> No/ More than one bold file???')
                 ipdb.set_trace()
@@ -228,7 +228,7 @@ def get_fmri_bold(comn_ids, atlas):
 
     return fmri_data
 
-def get_fmri(comn_ids, num_region):
+def get_fmri(comn_ids, num_region, task_name='rest'):
     '''
     fMRI time series on the region level
     fmri_data['time_res']
@@ -249,10 +249,13 @@ def get_fmri(comn_ids, num_region):
 
         for sess_dir in sess_dirs:
             cur_sess_num = int(sess_dir.split(os.path.sep)[-1].split('-')[-1])
-            name = glob.glob(os.path.join(sess_dir, '*rest*'+str(num_region)+'plus.mat'))
-            if len(name) != 1:
-                print('>> No/ More than one fmri file???')
-                ipdb.set_trace()
+            name = glob.glob(os.path.join(sess_dir, '*'+task_name+'*'+str(num_region)+'plus.mat'))
+            if len(name) > 1:
+                print(_subj, cur_sess_num,'>> More than one fmri file?')
+                continue
+            if len(name) == 0:
+                print(_subj, cur_sess_num,'>> No fmri file')
+                continue
 
             data = spio.loadmat(name[0])
             # TODO: 'bold' or 'corrected_bold'?
@@ -279,9 +282,12 @@ def get_sc(comn_ids, num_region):
         for sess_dir in sess_dirs:
             cur_sess_num = int(sess_dir.split(os.path.sep)[-1].split('-')[-1])
             name = glob.glob(os.path.join(sess_dir, '*'+str(num_region)+'plus.mat'))
-            if len(name) != 1:
-                print('>> No/ More than one sc file???')
-                ipdb.set_trace()
+            if len(name) > 1:
+                print(_subj, cur_sess_num,'>> More than one sc file?')
+                continue
+            if len(name) == 0:
+                print(_subj, cur_sess_num,'>> No sc file')
+                continue
 
             data = spio.loadmat(name[0])
             '''
@@ -295,23 +301,30 @@ def get_sc(comn_ids, num_region):
                             'plus_2mm_mni_17network_lps_ncount_pass'][:num_region, :num_region]
     return sc
 
-def get_comn_ids():
+def get_comn_ids(F_only=False):
     # get common subject id (having EEG, fMRI, SC)
-    num_li = ['0','1','2','3','4','5','6','7','8','9']
-    eeg_ids = sorted([o for o in os.listdir(eeg_d)
-                    if (os.path.isdir(os.path.join(eeg_d, o)) and
-                        o[0] in num_li)])
+    num_li = [str(x) for x in np.arange(10)]
+    
+    if not F_only:
+        eeg_ids = sorted([o for o in os.listdir(eeg_d)
+                        if (os.path.isdir(os.path.join(eeg_d, o)) and
+                            o[0] in num_li)])
+    
     fmri_ids = sorted([o for o in os.listdir(fmri_d)
                     if (os.path.isdir(os.path.join(fmri_d, o)) and
                         o[4] in num_li)])
     fmri_ids = [fmri_id[4:] for fmri_id in fmri_ids]
+
     sc_ids = sorted([o for o in os.listdir(sc_d)
                     if (os.path.isdir(os.path.join(sc_d, o)) and 
                         len(o) > 4 and o[4] in num_li)])
     sc_ids = [sc_id[4:] for sc_id in sc_ids]
 
-    comn_ids = sorted([v for v in eeg_ids if v in fmri_ids])
-    comn_ids = sorted([v for v in sc_ids if v in comn_ids])
+    if F_only:
+        comn_ids = sorted([v for v in sc_ids if v in fmri_ids])
+    else:
+        comn_ids = sorted([v for v in eeg_ids if v in fmri_ids])
+        comn_ids = sorted([v for v in sc_ids if v in comn_ids])
     # print(len(comn_ids), 'subjects:', comn_ids)
     return comn_ids
 

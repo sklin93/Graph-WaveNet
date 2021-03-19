@@ -63,6 +63,7 @@ torch.manual_seed(999)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(999)
     torch.cuda.empty_cache()
+# np.set_printoptions(suppress=True)
 
 def signaltonoise(a, axis=0, ddof=0):
     a = np.asanyarray(a)
@@ -124,7 +125,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             basic_len = 1456 #hard-coded for 1/6 subsample
         else:
             basic_len = 2912
-        CRASH_fname = 'CRASH_Fonly.pkl'
+        CRASH_fname = 'CRASH_Fonly_VWM.pkl'
         try:
             with open(CRASH_fname, 'rb') as handle:
                 if F_only:
@@ -138,7 +139,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
 
         except:
             scs, adj_mx, fmri_mat, eeg_mat, region_assignment, F_t = util.load_dataset_CRASH(args.adjtype)
-            
+            ipdb.set_trace()
             if subsample:
                 F_t /= subsample
             K = int(args.seq_length / F_t)
@@ -353,7 +354,7 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
         
     if args.data == 'CRASH':
         # separate adj matrices into train-val-test samples
-        ipdb.set_trace()
+        # ipdb.set_trace() # shuffle adj to test rand adj's influence
         _adj = [[] for i in range(len(adj_mx[0]))]
         for a in adj_mx:
             for i in range(len(_adj)):
@@ -1230,7 +1231,7 @@ if __name__ == "__main__":
     # main('garage/syn_epoch_95_0.1.pth', syn_file='syn_batch32_diffG.pkl', scatter=True)
     # main(syn_file='syn_batch32_diffG_map_dt.pkl', scatter=False)
 
-    main(scatter=False, _map=False, F_only=True, model_name='garage/CRASH_epoch_13_0.56.pth', finetune=True) # F prediction
+    main(scatter=False, _map=False, F_only=True)#, model_name='garage/CRASH_epoch_12_0.56.pth', finetune=True) # F prediction
     # main(scatter=False, _map=True, F_only=False, subsample=6)
     t2 = time.time()
     print("Total time spent: {:.4f}".format(t2-t1))

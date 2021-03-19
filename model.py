@@ -743,7 +743,7 @@ class gwnet_diff_G_Fonly(nn.Module):
             '''If different samples have different supports, theres no way to 
             init nodevec using supports info...'''
             # if aptinit is None:
-            self.nodevec = nn.Parameter(torch.randn(10, 10).to(self.device), 
+            self.nodevec = nn.Parameter(torch.randn(10, 5).to(self.device), 
                                     requires_grad=True).to(self.device)
 
             # else:
@@ -837,6 +837,9 @@ class gwnet_diff_G_Fonly(nn.Module):
             adp = F.softmax(F.relu(torch.matmul(nodevec, nodevec.transpose(1,2))), dim=2)
             if viz: 
                 plt.imshow(adp[0].detach().cpu().numpy())
+                plt.show()
+                # plot learned theta
+                plt.imshow(self.nodevec.detach().cpu().numpy())
                 plt.show()
                 ipdb.set_trace()
                 # adp.sum(1)

@@ -371,9 +371,9 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
             if args.randomadj:
                 adjinit['train'] = adjinit['val'] = adjinit['test'] = None
             else:
-                adjinit['train'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[:nTrain]]) 
-                adjinit['val'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[nTrain:-nTest]])
-                adjinit['test'] = np.concatenate([adj_mx[0][c][None,...] for c in adj_mx_idx[-nTest:]])
+                adjinit['train'] = np.concatenate([adj_mx[c][0][None,...] for c in adj_mx_idx[:nTrain]]) 
+                adjinit['val'] = np.concatenate([adj_mx[c][0][None,...] for c in adj_mx_idx[nTrain:-nTest]])
+                adjinit['test'] = np.concatenate([adj_mx[c][0][None,...] for c in adj_mx_idx[-nTest:]])
 
             if args.aptonly:
                 supports = None

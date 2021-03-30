@@ -716,7 +716,7 @@ class gwnet_diff_G(nn.Module):
 
 class gwnet_diff_G_Fonly(nn.Module):
     def __init__(self, device, num_nodes, dropout=0.3, supports_len=0, batch_size=32,
-                gcn_bool=True, addaptadj=True, in_dim=2, out_dim=12, out_dim_f=5,
+                gcn_bool=True, addaptadj=True, in_dim=2, seq_len=12, out_dim_f=5,
                 residual_channels=32, dilation_channels=32, skip_channels=256,
                 end_channels=512, kernel_size=2, blocks=4, layers=2,
                 out_nodes=64):
@@ -729,7 +729,7 @@ class gwnet_diff_G_Fonly(nn.Module):
         self.addaptadj = addaptadj
         self.device = device
         self.num_nodes = num_nodes
-        self.out_dim = out_dim
+        self.seq_len = seq_len
 
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()
@@ -743,7 +743,7 @@ class gwnet_diff_G_Fonly(nn.Module):
             '''If different samples have different supports, theres no way to 
             init nodevec using supports info...'''
             # if aptinit is None:
-            self.nodevec = nn.Parameter(torch.randn(10, 5).to(self.device), 
+            self.nodevec = nn.Parameter(torch.randn(seq_len, 5).to(self.device), 
                                     requires_grad=True).to(self.device)
 
             # else:
@@ -930,7 +930,7 @@ class gwnet_diff_G_Fonly(nn.Module):
         #     plt.legend()
         #     plt.title('hidden rep')                
         #     plt.show()
-
+        # ipdb.set_trace()
         x = F.relu(skip)
         x = F.relu(self.end_conv_1(x))
         x = self.end_conv_2(x)
@@ -1146,3 +1146,210 @@ class gwnet_diff_G2(nn.Module): # for model testing, f in, same f out
         x = F.relu(self.end_conv_1(x))
         x = self.end_conv_2(x).transpose(1,2)
         return x#.transpose(1,2)
+
+class gwnet_vgae(nn.Module):
+    def __init__(self, device, num_nodes, dropout=0.3, supports_len=0, batch_size=32,
+                gcn_bool=True, addaptadj=True, in_dim=2, seq_len=12, out_dim_f=5,
+                residual_channels=32, dilation_channels=32, skip_channels=256,
+                end_channels=512, kernel_size=2, blocks=4, layers=2,
+                out_nodes=61, hidden_dim=16):
+
+        super(gwnet_vgae, self).__init__()
+        self.dropout = dropout
+        self.blocks = blocks
+        self.layers = layers
+        self.gcn_bool = gcn_bool
+        self.addaptadj = addaptadj
+        self.device = device
+        self.num_nodes = num_nodes
+        self.seq_len = seq_len
+
+        self.filter_convs = nn.ModuleList()
+        self.gate_convs = nn.ModuleList()
+        self.residual_convs = nn.ModuleList()
+        self.skip_convs = nn.ModuleList()
+        self.bn = nn.ModuleList()
+        self.gconv = nn.ModuleList()
+        self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)
+        
+        if self.gcn_bool and self.addaptadj:
+            '''If different samples have different supports, theres no way to 
+            init nodevec using supports info...'''
+            # if aptinit is None:
+            self.nodevec = nn.Parameter(torch.randn(seq_len, 5).to(self.device), 
+                                    requires_grad=True).to(self.device)
+
+            # else:
+            #     ipdb.set_trace()
+            #     m, p, n = torch.svd(aptinit)
+            #     _p = torch.diag_embed(p[:, :10] ** 0.5)
+            #     initemb1 = torch.bmm(m[:, :, :10], _p)
+            #     initemb2 = torch.bmm(_p, torch.transpose(n[:, :, :10], 1, 2))
+            #     self.nodevec1 = nn.Parameter(initemb1, requires_grad=True).to(self.device)
+            #     self.nodevec2 = nn.Parameter(initemb2, requires_grad=True).to(self.device)
+
+        self.start_conv = nn.Conv2d(in_channels=in_dim,
+                                    out_channels=residual_channels,
+                                    kernel_size=(1,1))
+
+        receptive_field = 1
+        multi_factor = kernel_size #2
+        for b in range(blocks):
+            additional_scope = kernel_size - 1
+            new_dilation = 1 #4
+            for i in range(layers):
+                # dilated convolutions
+                # TODO: change kernel_size and stride
+                self.filter_convs.append(CausalConv2d(in_channels=residual_channels,
+                                                   out_channels=dilation_channels,
+                                                   kernel_size=(1,kernel_size),
+                                                   # stride=(1,2),
+                                                   dilation=(1,new_dilation)))
+
+                self.gate_convs.append(CausalConv2d(in_channels=residual_channels,
+                                                 out_channels=dilation_channels,
+                                                 kernel_size=(1, kernel_size), 
+                                                 # stride=(1,2),
+                                                 dilation=(1,new_dilation)))
+
+                # 1x1 convolution for residual connection
+                self.residual_convs.append(nn.Conv2d(in_channels=dilation_channels,
+                                                     out_channels=residual_channels,
+                                                     kernel_size=(1, 1)))
+
+                # 1x1 convolution for skip connection
+                self.skip_convs.append(nn.Conv2d(in_channels=dilation_channels,
+                                                 out_channels=skip_channels,
+                                                 kernel_size=(1, 1)))
+                self.bn.append(nn.BatchNorm2d(residual_channels))
+                new_dilation *= multi_factor
+                receptive_field += additional_scope
+                additional_scope *= multi_factor
+                if self.gcn_bool:
+                    self.gconv.append(gcn2(dilation_channels, residual_channels, dropout,
+                                                              support_len=supports_len))
+
+        self.gcn_mean = gcn2(skip_channels, hidden_dim, dropout=0, support_len=supports_len)
+        self.gcn_logstddev = gcn2(skip_channels, hidden_dim, dropout=0, support_len=supports_len)
+        # self.end_conv_1 = nn.Conv2d(skip_channels, skip_channels//2, 1, bias=True)
+        # self.end_conv_2 = nn.Conv2d(skip_channels//2, out_dim_f, 1, bias=True)
+        # self.end_conv_3 = nn.Conv2d(out_dim_f, 1, 1, bias=True)
+
+        self.decode_gcn1 = gcn2(skip_channels, hidden_dim, dropout, support_len=1)
+        self.decode_gcn2 = gcn2(hidden_dim, 1, dropout, support_len=1)
+
+        self.receptive_field = receptive_field
+
+    def forward(self, input, supports=None, aptinit=None, viz=False):
+        # inputs: [batch_size, 1, num_nodes, in_len+1], supports: len 2, each (batch_size, num_nodes, num_nodes)
+        if self.gcn_bool and self.addaptadj:
+            if supports is None:
+                supports = []
+        ### normal forward
+        # print(self.receptive_field)
+        # in_len = input.size(3)
+        # if in_len<self.receptive_field:
+        #     x = nn.functional.pad(input,(self.receptive_field-in_len,0,0,0))
+        # else:
+        #     x = input
+        # x = self.start_conv(x)
+        x = self.start_conv(input)
+        skip = 0
+
+        # calculate the current adaptive adj matrix once per iteration
+        new_supports = None
+        if self.gcn_bool and self.addaptadj:
+            nodevec = torch.einsum('ncl,lv->ncv', (input[:,0,...],self.nodevec))
+            adp = F.softmax(F.relu(torch.matmul(nodevec, nodevec.transpose(1,2))), dim=2)
+            if viz: 
+                plt.imshow(adp[0].detach().cpu().numpy())
+                plt.show()
+                # plot learned theta
+                plt.imshow(self.nodevec.detach().cpu().numpy())
+                plt.show()
+                ipdb.set_trace()
+                # adp.sum(1)
+                # _, idx = torch.sort(adp.sum(1)) 
+                # top10 = idx.cpu().numpy()[:,::-1][:,:10]
+
+            if len(supports) > 0:
+                new_supports = supports + [adp]
+            else:
+                new_supports = [adp]
+            del adp
+
+        # WaveNet layers
+        for i in range(self.blocks * self.layers):       
+            # print(i, x.shape)
+            #            |----------------------------------------|     *residual*
+            #            |                                        |
+            #            |    |-- conv -- tanh --|                |
+            # -> dilate -|----|                  * ----|-- 1x1 -- + --> *input*
+            #                 |-- conv -- sigm --|     |
+            #                                         1x1
+            #                                          |
+            # ---------------------------------------> + -------------> *skip*
+
+            #(dilation, init_dilation) = self.dilations[i]
+
+            #residual = dilation_func(x, dilation, init_dilation, i)
+            residual = x #[batch_size, residual_dim, 80, 16]
+           
+            # dilated convolution
+            filter = self.filter_convs[i](residual)
+            filter = torch.tanh(filter[..., :-self.filter_convs[i].padding[1]])
+            gate = self.gate_convs[i](residual)
+            gate = torch.sigmoid(gate[..., :-self.gate_convs[i].padding[1]])
+            x = filter * gate
+            if i % self.layers == self.layers-1:
+                x = F.max_pool2d(x, (1,2))
+            # parametrized skip connection
+            s = x
+            s = self.skip_convs[i](s)
+            try:
+                if s.size(-1)*2 == skip.size(-1):
+                    skip = F.max_pool2d(skip,(1,2))
+                else:
+                    skip = skip[..., -s.size(-1):]
+            except:
+                skip = 0
+            skip = s + skip
+
+            t_rep = x
+
+            if self.gcn_bool:
+                if self.addaptadj:
+                    # x: [64, 32, 80, 15]
+                    x = self.gconv[i](x, self.dummy_tensor, *new_supports)
+                    # x = checkpoint(self.gconv[i], x, self.dummy_tensor, *new_supports)
+                else:
+                    assert supports is not None
+                    x = self.gconv[i](x, self.dummy_tensor, *supports)
+                    # x = checkpoint(self.gconv[i], x, self.dummy_tensor, *supports)
+            else:
+                x = self.residual_convs[i](x)
+                # x = checkpoint(self.residual_convs[i], x, self.dummy_tensor)
+
+            x = x + residual[..., -x.size(-1):]
+            # add t representation
+            # x = torch.cat([x, residual[:, :, :, -x.size(3):], t_rep], axis=1)
+            x = self.bn[i](x) #torch.Size([8, 32, 200, 15])
+
+        x = F.relu(skip) # x: hidden embedding
+        # ipdb.set_trace()
+
+        self.mean = self.gcn_mean(x, self.dummy_tensor, *new_supports).squeeze()
+        self.logstd = self.gcn_logstddev(x, self.dummy_tensor, *new_supports).squeeze()
+        gaussian_noise = torch.randn_like(self.mean)
+        sampled_z = gaussian_noise*torch.exp(self.logstd) + self.mean
+        
+        decoder_A = torch.sigmoid(torch.matmul(sampled_z.transpose(1,2), sampled_z))
+
+        # ipdb.set_trace()
+        # x = F.relu(self.end_conv_1(x))
+        # x = self.end_conv_2(x)
+        # x = self.end_conv_3(F.relu(x))
+        x = F.relu(self.decode_gcn1(x, self.dummy_tensor, decoder_A))
+        x = self.decode_gcn2(x, self.dummy_tensor, decoder_A)
+
+        return x, new_supports[-1]#.sum(1)        

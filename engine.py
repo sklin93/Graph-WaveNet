@@ -87,10 +87,11 @@ class trainer():
             out_dim = seq_length
 
             if F_only:
-                self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, supports_len, batch_size,
+                # self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, supports_len, batch_size,
                 # self.model = gwnet_diff_G_Fonly(device, num_nodes, dropout, 1, batch_size, #validate SC (support_len=1)
+                self.model = gwnet_vgae(device, num_nodes, dropout, supports_len, batch_size,
                                    gcn_bool=gcn_bool, addaptadj=addaptadj,
-                                   in_dim=in_dim, out_dim=out_dim, out_dim_f=out_dim_f,
+                                   in_dim=in_dim, seq_len=seq_length, out_dim_f=out_dim_f,
                                    residual_channels=nhid, dilation_channels=nhid, 
                                    skip_channels=nhid*8, end_channels=nhid*16,
                                    kernel_size=kernel_size, blocks=blocks, layers=layers, 

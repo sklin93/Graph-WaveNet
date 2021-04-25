@@ -310,6 +310,8 @@ class trainer():
 
         if self.F_only:
             F = output[0].squeeze()
+            ipdb.set_trace()
+            F = self.scaler.inverse_transform(F)
         else:
             if self.meta is None:
                 E = output[0].squeeze()
@@ -325,7 +327,9 @@ class trainer():
                 # plt.plot(F[0,0].detach().cpu().numpy())
                 # plt.plot(F[0,1].detach().cpu().numpy())
                 # plt.show()
-                loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
+                # ipdb.set_trace()
+                loss = self.loss(F, real_F) - 0.5/F.shape[0]*(1 + 2*self.model.logstd \
+                    - self.model.mean**2 - torch.exp(self.model.logstd)**2).sum(1).mean() #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()
                 real_F = real_F.to(self.device).squeeze()
@@ -580,34 +584,43 @@ class trainer():
         ##### loss #####
         if self.meta is None:
             if viz:
-                # # for recursive pred
-                # cur_in = input
-                # for i in range(real_F.shape[1]):
-                #     with torch.no_grad():
-                #         output = self.model(cur_in, supports, aptinit)
-                #     cur_in = torch.cat((cur_in, output),-1)[...,1:]
-                # F = cur_in.squeeze().transpose(1,2)
-                # # ipdb.set_trace()
-                # for j in range(5):
-                #     plt.plot(F.squeeze()[0,:,j].cpu().numpy(), 'r')
-                #     plt.plot(real_F.squeeze()[0,:,j].cpu().numpy(), 'g')
-                #     plt.show()
+                # for recursive pred
+                cur_in = input
+                for i in range(real_F.shape[1]):
+                    with torch.no_grad():
+                        output = self.model(cur_in, supports, aptinit)
+                    # ipdb.set_trace()
+                    cur_in = torch.cat((cur_in, output[0]),-1)[...,1:]
+                F = cur_in[...,-real_F.shape[1]:].squeeze().transpose(1,2)
+                
+                viz_t = 5 # visualize how many frames across 200 regions
+                for j in range(viz_t):
+                    plt.plot(F.squeeze()[0,j].cpu().numpy(), 'r')
+                    plt.plot(real_F.squeeze()[0,j].cpu().numpy(), 'g')
+                    plt.show()
                 # print(util.get_cc(F, real_F))
-                # ipdb.set_trace()
+                ipdb.set_trace()
+                
+                viz_node = 5 # visualize how many nodes across prediction times
+                for j in range(viz_node):
+                    plt.plot(F.squeeze()[0,:,j].cpu().numpy(), 'r')
+                    plt.plot(real_F.squeeze()[0,:,j].cpu().numpy(), 'g')
+                    plt.show()
+                ipdb.set_trace()
 
-                plt.figure('pred')
-                for j in range(10):
-                    if self.F_only:
-                        plt.plot(F[0,:,j].cpu().numpy())
-                    else:
-                        plt.plot(E[0,:,j].cpu().numpy())
-                plt.figure('gt')
-                for j in range(10):
-                    if self.F_only:
-                        plt.plot(real_F[0,:,j].cpu().numpy())
-                    else:
-                        plt.plot(real_E[0,:,j].cpu().numpy())
-                plt.show()
+                # plt.figure('pred')
+                # for j in range(10):
+                #     if self.F_only:
+                #         plt.plot(F[0,:,j].cpu().numpy())
+                #     else:
+                #         plt.plot(E[0,:,j].cpu().numpy())
+                # plt.figure('gt')
+                # for j in range(10):
+                #     if self.F_only:
+                #         plt.plot(real_F[0,:,j].cpu().numpy())
+                #     else:
+                #         plt.plot(real_E[0,:,j].cpu().numpy())
+                # plt.show()
 
                 # see if different inputs have the same output..
                 if not self.F_only:
@@ -624,7 +637,8 @@ class trainer():
                 # plot 
             if self.F_only:
                 real_F = real_F.to(self.device).squeeze() # single pred: real_F[:,0,:]
-                loss = self.loss(F, real_F) #+ self.loss2(F, real_F)
+                loss = self.loss(F, real_F) - 0.5/F.shape[0]*(1 + 2*self.model.logstd \
+                    - self.model.mean**2 - torch.exp(self.model.logstd)**2).sum(1).mean() #+ self.loss2(F, real_F)
             else:
                 real_E = real_E.to(self.device).squeeze()
                 real_F = real_F.to(self.device).squeeze()

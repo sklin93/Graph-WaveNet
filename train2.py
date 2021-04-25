@@ -446,6 +446,11 @@ def main(model_name=None, finetune=False, syn_file='syn_diffG.pkl',
                             x, y, adj_idx, _coeffs, adjinit['train'] = shuffle(x, y, adj_idx, _coeffs, adjinit['train'])
                         else:
                             x, y, adj_idx, adjinit['train'] = shuffle(x, y, adj_idx, adjinit['train'])
+                    else:
+                        if scatter:
+                            x, y, adj_idx, _coeffs = shuffle(x, y, adj_idx, _coeffs)
+                        else:
+                            x, y, adj_idx = shuffle(x, y, adj_idx)
                 else:
                     if scatter:
                         x, y, adj_idx, _coeffs = shuffle(x, y, adj_idx, _coeffs)

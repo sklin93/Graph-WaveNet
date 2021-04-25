@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch
+# from torch_geometric.nn import SAGPooling, TopKPooling, ASAPooling, PANPooling, max_pool 
 import numpy as np
 import math
 from torch.autograd import Variable
@@ -9,6 +11,40 @@ from kymatio.torch import Scattering1D
 import sys
 import matplotlib.pyplot as plt
 import ipdb
+# from torch_geometric.nn import dense_diff_pool
+
+EPS = 1e-15
+
+def dense_diff_pool(x, s, *support):
+    # _out = [x]
+    s = s.transpose(1,2) # (64,200,100,10) bnct
+    s = torch.softmax(s, dim=-2)
+    # ipdb.set_trace()
+    x = torch.einsum('bfnt,bnct->bfct', x, s).contiguous() #(64, 32, 100, 10) 
+    _s = torch.softmax(s.transpose(1,2), dim=-2) # (64, 100, 200, 10) bcnt
+    out = torch.einsum('bfct,bcnt->bfnt', x, _s).contiguous()#(64, 32, 200, 10)
+    # for a in support:
+    #     x = x.unsqueeze(0) if x.dim() == 2 else x
+    #     a = a.unsqueeze(0) if a.dim() == 2 else a
+    #     s = s.unsqueeze(0) if s.dim() == 2 else s
+    #     ipdb.set_trace()
+    #     batch_size, num_nodes, _, _ = x.size()
+    #     s = torch.softmax(s, dim=-2) #dim -1 or -2 here? originally it is -1
+    #     ipdb.set_trace()
+    #     # out = torch.matmul(s.transpose(2, 3), x)
+    #     out = torch.einsum('bcnt,bfnt->bcft', s, x)
+    #     # out_adj = torch.matmul(torch.matmul(s.transpose(2, 3), a), s)
+    #     # link_loss = a - torch.matmul(s, s.transpose(2, 3))
+    #     # link_loss = torch.norm(link_loss, p=2)
+    #     # link_loss = link_loss / a.numel()
+    #     # ent_loss = (-s * torch.log(s + EPS)).sum(dim=-1).mean()
+    #     _out.append(out)      
+
+    # h = torch.cat(out, dim=1)
+    # h_adj = torch.cat(out, dim = 1)
+    
+    return out #, h_adj, link_loss, ent_loss
+
 
 # Fourier feature mapping
 def fourier_mapping(x, B):
@@ -97,6 +133,37 @@ class gcn2(nn.Module):
         h = F.dropout(h, self.dropout, training=self.training)
         return h
 
+class gcn3(nn.Module): #GCN module for pooling embedding
+    def __init__(self,c_in,c_out,dropout,support_len=3,order=2, lin = False):
+        super(gcn3,self).__init__()
+        self.nconv = nconv2()
+        c_in = (order*support_len+1)*c_in #(2*3+1)*32=224
+        self.mlp = linear(c_in,c_out)
+        self.mlp2 = linear(200,100) #hard coded
+        self.dropout = dropout
+        self.order = order
+        self.lin = lin
+
+    def forward(self,x, dummy_tensor, *support):
+        out = [x]
+        for a in support:
+            # a: [64, 80, 80], x:[64, 32, 80, 15]
+            x1 = self.nconv(x,a)
+            out.append(x1)
+            for k in range(2, self.order + 1): # k-hop, diffuse one more time per loop
+                x2 = F.relu(self.nconv(x1,a))
+                out.append(x2)
+                x1 = x2
+        # len(out)=order*support_len+1 (7); each:[64, 32, 80, 15]
+        h = torch.cat(out,dim=1)
+        h = self.mlp(h)
+        h = F.dropout(h, self.dropout, training=self.training)
+        if self.lin:
+            ipdb.set_trace()
+            h = F.relu(self.mlp2(h.transpose(1,2)))
+            h = F.dropout(h, self.dropout, training=self.training)
+        return h.transpose(1,2)
+
 def CausalConv2d(in_channels, out_channels, kernel_size, dilation=(1,1), **kwargs):
     pad = (kernel_size[1] - 1) * dilation[1]
     return nn.Conv1d(in_channels, out_channels, kernel_size, padding=(0,pad), dilation=dilation, **kwargs)
@@ -124,6 +191,83 @@ class pool(torch.nn.Module):
         x = x * self.non_linearity(score)
         return x
 
+# from gae.layers import GraphConvolution
+  
+import torch
+import torch.nn.functional as F
+from torch.nn.modules.module import Module
+from torch.nn.parameter import Parameter
+
+
+class GraphConvolution(Module):
+    """
+    Simple GCN layer, similar to https://arxiv.org/abs/1609.02907
+    """
+
+    def __init__(self, in_features, out_features, dropout=0., act=F.relu):
+        super(GraphConvolution, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.dropout = dropout
+        self.act = act
+        self.weight = Parameter(torch.FloatTensor(in_features, out_features))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        torch.nn.init.xavier_uniform_(self.weight)
+
+    def forward(self, input, adj):
+        input = F.dropout(input, self.dropout, self.training)
+        support = torch.mm(input, self.weight)
+        output = torch.spmm(adj, support)
+        output = self.act(output)
+        return output
+
+    def __repr__(self):
+        return self.__class__.__name__ + ' (' \
+               + str(self.in_features) + ' -> ' \
+               + str(self.out_features) + ')'
+
+# class GCNModelVAE(nn.Module):
+#     def __init__(self, input_feat_dim, hidden_dim1, hidden_dim2, dropout):
+#         super(GCNModelVAE, self).__init__()
+#         self.gc1 = GraphConvolution(input_feat_dim, hidden_dim1, dropout, act=F.relu)
+#         self.gc2 = GraphConvolution(hidden_dim1, hidden_dim2, dropout, act=lambda x: x)
+#         self.gc3 = GraphConvolution(hidden_dim1, hidden_dim2, dropout, act=lambda x: x)
+#         self.dc = InnerProductDecoder(dropout, act=lambda x: x)
+
+#     def encode(self, x, adj):
+#         hidden1 = self.gc1(x, adj)
+#         return self.gc2(hidden1, adj), self.gc3(hidden1, adj)
+
+#     def reparameterize(self, mu, logvar):
+#         if self.training:
+#             std = torch.exp(logvar)
+#             eps = torch.randn_like(std)
+#             return eps.mul(std).add_(mu)
+#         else:
+#             return mu
+
+#     def forward(self, x, adj):
+#         mu, logvar = self.encode(x, adj)
+#         z = self.reparameterize(mu, logvar)
+#         return self.dc(z), mu, logvar
+
+
+# class InnerProductDecoder(nn.Module):
+#     """Decoder for using inner product for prediction."""
+
+#     def __init__(self, dropout, act=torch.sigmoid):
+#         super(InnerProductDecoder, self).__init__()
+#         self.dropout = dropout
+#         self.act = act
+
+#     def forward(self, z):
+#         z = F.dropout(z, self.dropout, training=self.training)
+#         adj = self.act(torch.mm(z, z.t()))
+#         return adj
+
+  
 class gwnet(nn.Module):
     def __init__(self, device, num_nodes, dropout=0.3, supports=None, gcn_bool=True, addaptadj=True, aptinit=None, in_dim=2,out_dim=12,residual_channels=32,dilation_channels=32,skip_channels=256,end_channels=512,kernel_size=2,blocks=4,layers=2):
         super(gwnet, self).__init__()
@@ -1151,7 +1295,7 @@ class gwnet_vgae(nn.Module):
     def __init__(self, device, num_nodes, dropout=0.3, supports_len=0, batch_size=32,
                 gcn_bool=True, addaptadj=True, in_dim=2, seq_len=12, out_dim_f=5,
                 residual_channels=32, dilation_channels=32, skip_channels=256,
-                end_channels=512, kernel_size=2, blocks=4, layers=2,
+                end_channels=512, kernel_size=3, blocks=4, layers=2,
                 out_nodes=61, hidden_dim=16):
 
         super(gwnet_vgae, self).__init__()
@@ -1170,6 +1314,7 @@ class gwnet_vgae(nn.Module):
         self.skip_convs = nn.ModuleList()
         self.bn = nn.ModuleList()
         self.gconv = nn.ModuleList()
+        self.gconv_pool = nn.ModuleList()
         self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)
         
         if self.gcn_bool and self.addaptadj:
@@ -1194,6 +1339,8 @@ class gwnet_vgae(nn.Module):
 
         receptive_field = 1
         multi_factor = kernel_size #2
+        clusters = [150,110,85,65,50,30,15,7]
+
         for b in range(blocks):
             additional_scope = kernel_size - 1
             new_dilation = 1 #4
@@ -1226,17 +1373,28 @@ class gwnet_vgae(nn.Module):
                 receptive_field += additional_scope
                 additional_scope *= multi_factor
                 if self.gcn_bool:
-                    self.gconv.append(gcn2(dilation_channels, residual_channels, dropout,
-                                                              support_len=supports_len))
+                    self.gconv.append(gcn2(dilation_channels, residual_channels, dropout, support_len=supports_len))
+                    if i == self.layers-1:
+                        self.gconv_pool.append(gcn2(dilation_channels, clusters[b], dropout, support_len=supports_len))
+
+        # self.gcn_pool0 = gcn2(dilation_channels, 100, dropout, support_len=supports_len)
+        # self.gcn_pool1 = gcn2(dilation_channels, 50, dropout, support_len=supports_len) 
+        # self.gcn_pool2 = gcn2(dilation_channels, 20, dropout, support_len=supports_len)
+        # self.gcn_pool3 = gcn2(dilation_channels, 17, dropout, support_len=supports_len)
+        # self.gcn_embed = gcn2(dilation_channels, residual_channels, dropout, support_len=supports_len)
 
         self.gcn_mean = gcn2(skip_channels, hidden_dim, dropout=0, support_len=supports_len)
         self.gcn_logstddev = gcn2(skip_channels, hidden_dim, dropout=0, support_len=supports_len)
-        # self.end_conv_1 = nn.Conv2d(skip_channels, skip_channels//2, 1, bias=True)
-        # self.end_conv_2 = nn.Conv2d(skip_channels//2, out_dim_f, 1, bias=True)
-        # self.end_conv_3 = nn.Conv2d(out_dim_f, 1, 1, bias=True)
 
-        self.decode_gcn1 = gcn2(skip_channels, hidden_dim, dropout, support_len=1)
-        self.decode_gcn2 = gcn2(hidden_dim, 1, dropout, support_len=1)
+        self.end_conv_1 = nn.Conv2d(skip_channels, skip_channels//2, 1, bias=True)
+        # self.end_conv_2 = nn.Conv2d(skip_channels//2, skip_channels//2, 1, bias=True)
+        self.end_conv_3 = nn.Conv2d(skip_channels//2, out_dim_f, 1, bias=True)
+
+        # self.decode_gcn1 = gcn2(skip_channels, hidden_dim, dropout, support_len=1)
+        # self.decode_gcn2 = gcn2(hidden_dim, 1, dropout, support_len=1)
+
+        # self.decode_gcn1 = nn.Conv2d(skip_channels, hidden_dim, 1, bias = True)
+        # self.decode_gcn2 = nn.Conv2d(hidden_dim, 1, 1, bias = True)
 
         self.receptive_field = receptive_field
 
@@ -1278,6 +1436,7 @@ class gwnet_vgae(nn.Module):
                 new_supports = [adp]
             del adp
 
+        u = 0
         # WaveNet layers
         for i in range(self.blocks * self.layers):       
             # print(i, x.shape)
@@ -1317,15 +1476,29 @@ class gwnet_vgae(nn.Module):
 
             t_rep = x
 
+            # S = self.gcn_pool(x, self.dummy_tensor, *new_supports)
+            # x = self.gcn_embed(x, self.dummy_tensor, *new_supports)
+            # x, adj, l1, e1 = torch_geometric.nn.dense.diff_pool(x, *new_supports, S)
+
             if self.gcn_bool:
                 if self.addaptadj:
-                    # x: [64, 32, 80, 15]
                     x = self.gconv[i](x, self.dummy_tensor, *new_supports)
                     # x = checkpoint(self.gconv[i], x, self.dummy_tensor, *new_supports)
                 else:
                     assert supports is not None
                     x = self.gconv[i](x, self.dummy_tensor, *supports)
                     # x = checkpoint(self.gconv[i], x, self.dummy_tensor, *supports)
+                if i % self.layers == self.layers-1:
+                    # ipdb.set_trace()
+                    S = self.gconv_pool[i // self.layers](x, self.dummy_tensor, *new_supports)
+                    x = dense_diff_pool(x, S, *new_supports)
+                    # S = eval("self.gcn_pool" + str(u) + "(x, self.dummy_tensor, *new_supports)")
+                    # x = self.gconv[i](x, self.dummy_tensor, *new_supports)
+                    # # S = self.gcn_pool(x, self.dummy_tensor, *new_supports)
+                    # # x = self.gcn_embed(x, self.dummy_tensor, *new_supports)
+                    # # ipdb.set_trace()
+                    # x = dense_diff_pool(x, S, *new_supports)
+                    # u += 1                    
             else:
                 x = self.residual_convs[i](x)
                 # x = checkpoint(self.residual_convs[i], x, self.dummy_tensor)
@@ -1346,10 +1519,11 @@ class gwnet_vgae(nn.Module):
         decoder_A = torch.sigmoid(torch.matmul(sampled_z.transpose(1,2), sampled_z))
 
         # ipdb.set_trace()
-        # x = F.relu(self.end_conv_1(x))
-        # x = self.end_conv_2(x)
+        x = F.relu(self.end_conv_1(x))
+        x = self.end_conv_3(x)
         # x = self.end_conv_3(F.relu(x))
-        x = F.relu(self.decode_gcn1(x, self.dummy_tensor, decoder_A))
-        x = self.decode_gcn2(x, self.dummy_tensor, decoder_A)
 
-        return x, new_supports[-1]#.sum(1)        
+        # x = F.relu(self.decode_gcn1(x, self.dummy_tensor, decoder_A))
+        # x = self.decode_gcn2(x, self.dummy_tensor, decoder_A)
+
+        return x, new_supports[-1]#.sum(1)
